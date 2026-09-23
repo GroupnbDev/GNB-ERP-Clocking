@@ -31,7 +31,8 @@ internal sealed record PhotoUploadResponse(
 internal sealed record ClockRequest(
     [property: JsonPropertyName("rfid")] string Rfid,
     [property: JsonPropertyName("image_path")] string ImagePath,
-    [property: JsonPropertyName("reset_completed_day")] bool ResetCompletedDay = false);
+    [property: JsonPropertyName("reset_completed_day")] bool ResetCompletedDay = false,
+    [property: JsonPropertyName("local_time")] DateTimeOffset? LocalTime = null);
 
 internal sealed record ClockActionResponse(
     [property: JsonPropertyName("action")] string? Action,

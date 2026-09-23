@@ -7,8 +7,8 @@ namespace Gnb.Clocking.App.Configuration;
 /// <summary>
 /// Kiosk settings, later sources win:
 /// embedded <c>appsettings.json</c> → embedded <c>appsettings.Local.json</c> →
-/// <c>{AppData}/clockkiosk.settings.json</c> → gitignored <c>.env</c> (<c>ClockKiosk__*</c>) →
-/// environment variables.
+/// <c>{AppData}/clockkiosk.settings.json</c> → a readable <c>.env</c> beside the project,
+/// otherwise the <c>.env</c> embedded at build → environment variables.
 /// </summary>
 public static class KioskConfiguration
 {
@@ -34,12 +34,13 @@ public static class KioskConfiguration
     }
 
     /// <summary>
-    /// Reads a gitignored <c>.env</c> above the app bundle (repo root during local runs).
+    /// Reads a gitignored <c>.env</c>. A file the process can open wins over the copy
+    /// embedded at build, so a port change applies without a rebuild when the file is readable.
     /// Only <c>ClockKiosk__*</c> keys are imported.
     /// </summary>
     private static IEnumerable<KeyValuePair<string, string?>> ReadDotEnv()
     {
-        var lines = ReadEmbeddedLines() ?? ReadExternalLines();
+        var lines = ReadExternalLines() ?? ReadEmbeddedLines();
         if (lines == null)
             return Array.Empty<KeyValuePair<string, string?>>();
 

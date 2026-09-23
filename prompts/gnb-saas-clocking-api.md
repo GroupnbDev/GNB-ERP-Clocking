@@ -92,10 +92,10 @@ One candidate can have one active badge per tenant. Scanning that badge resolves
    JSON body:
 
    ```json
-   { "rfid": "04A1C8E291", "image_path": "Records/2026-09-22/ClockIN.jpeg" }
+   { "rfid": "04A1C8E291", "image_path": "Records/2026-09-22/ClockIN.jpeg", "local_time": "2026-09-22T16:01:00+08:00" }
    ```
 
-   `image_path` is required and must be the canonical clock photo for that action. Delegate the punch write to the existing portal clock methods (or a shared internal method they both call) so hours, status, and the open-shift rules stay identical. The kiosk has no browser geolocation. Pass a station location from `ClockKiosk:Latitude`, `ClockKiosk:Longitude`, and `ClockKiosk:LocationLabel` into `location_in` / `location_out` instead of rejecting the call for a missing device GPS fix.
+   `image_path` is required and must be the canonical clock photo for that action. `local_time` is the kiosk device time with its UTC offset. The API keeps that offset for the punchcard wall clock (so 16:01 stays 16:01) and still uses the server clock for the instant. Delegate the punch write to the existing portal clock methods (or a shared internal method they both call) so hours, status, and the open-shift rules stay identical. The kiosk has no browser geolocation. Pass a station location from `ClockKiosk:Latitude`, `ClockKiosk:Longitude`, and `ClockKiosk:LocationLabel` into `location_in` / `location_out` instead of rejecting the call for a missing device GPS fix.
 
    Response matches `PortalClockActionResponseDto` plus `candidate_id` and `image_path`. Map the existing failures to 400:
 

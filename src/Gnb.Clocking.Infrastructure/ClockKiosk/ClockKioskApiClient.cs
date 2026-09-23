@@ -83,7 +83,7 @@ public sealed class ClockKioskApiClient
         using var response = await SendAsync(
             () => new HttpRequestMessage(HttpMethod.Post, route)
             {
-                Content = JsonContent.Create(new ClockRequest(rfid, imagePath, resetCompletedDay)),
+                Content = JsonContent.Create(new ClockRequest(rfid, imagePath, resetCompletedDay, DateTimeOffset.Now)),
             },
             cancellationToken).ConfigureAwait(false);
 
