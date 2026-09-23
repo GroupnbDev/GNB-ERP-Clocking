@@ -1,15 +1,21 @@
 using Gnb.Clocking.App.Camera;
 using Gnb.Clocking.Application.Clocking;
 using Microsoft.Maui.Handlers;
-using Microsoft.UI.Xaml.Media;
 using Windows.Media.Capture;
+using Windows.Media.Capture.Frames;
+using Windows.Media.Core;
 using Windows.Media.MediaProperties;
+using Windows.Media.Playback;
 using Windows.Storage.Streams;
-using WinCaptureElement = Microsoft.UI.Xaml.Controls.CaptureElement;
+using WinPreviewElement = Microsoft.UI.Xaml.Controls.MediaPlayerElement;
 
 namespace Gnb.Clocking.App.Platforms.Windows;
 
-public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinCaptureElement>, IClockCameraHandler
+// WinUI 3 never got the classic UWP CaptureElement control (tracked upstream at
+// microsoft/microsoft-ui-xaml#8214), so the camera preview is rendered through a
+// MediaPlayerElement bound to a MediaFrameSource instead, per Microsoft's own guidance:
+// https://learn.microsoft.com/windows/apps/develop/camera/camera-quickstart-winui3
+public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinPreviewElement>, IClockCameraHandler
 {
     public static IPropertyMapper<ClockCameraView, WinClockCameraHandler> PropertyMapper =
         new PropertyMapper<ClockCameraView, WinClockCameraHandler>(ViewMapper);
@@ -24,6 +30,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinCapt
     private const double MaxFrameRate = 30;
 
     private MediaCapture? _media;
+    private MediaPlayer? _mediaPlayer;
     private VideoEncodingProperties? _previewFormat;
     private string? _error;
 
@@ -31,25 +38,29 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinCapt
     {
     }
 
-    protected override WinCaptureElement CreatePlatformView() => new()
+    protected override WinPreviewElement CreatePlatformView() => new()
     {
-        Stretch = Stretch.UniformToFill
+        Stretch = Microsoft.UI.Xaml.Media.Stretch.UniformToFill,
+        AreTransportControlsEnabled = false
     };
 
-    protected override void ConnectHandler(WinCaptureElement platformView)
+    protected override void ConnectHandler(WinPreviewElement platformView)
     {
         base.ConnectHandler(platformView);
         _ = StartAsync(platformView);
     }
 
-    protected override async void DisconnectHandler(WinCaptureElement platformView)
+    protected override void DisconnectHandler(WinPreviewElement platformView)
     {
-        if (_media != null)
+        if (_mediaPlayer != null)
         {
-            await _media.StopPreviewAsync();
-            _media.Dispose();
-            _media = null;
+            _mediaPlayer.Pause();
+            _mediaPlayer.Dispose();
+            _mediaPlayer = null;
         }
+
+        _media?.Dispose();
+        _media = null;
 
         base.DisconnectHandler(platformView);
     }
@@ -79,7 +90,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinCapt
         return bytes;
     }
 
-    private async Task StartAsync(WinCaptureElement view)
+    private async Task StartAsync(WinPreviewElement view)
     {
         try
         {
@@ -90,8 +101,20 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinCapt
             }).AsTask().ConfigureAwait(true);
 
             _previewFormat = await UseLightPreviewAsync(media).ConfigureAwait(true);
-            view.Source = media;
-            await media.StartPreviewAsync().AsTask().ConfigureAwait(true);
+
+            var frameSource = FindColorFrameSource(media)
+                ?? throw new ClockingException("No video preview or record stream found.");
+
+            var player = new MediaPlayer
+            {
+                RealTimePlayback = true,
+                AutoPlay = false,
+                Source = MediaSource.CreateFromMediaFrameSource(frameSource)
+            };
+            view.SetMediaPlayer(player);
+            player.Play();
+
+            _mediaPlayer = player;
             _media = media;
             _ready.TrySetResult();
             VirtualView.SetStatus("Camera live");
@@ -104,6 +127,20 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinCapt
         {
             Fail(ex.Message);
         }
+    }
+
+    /// <summary>Prefers the dedicated preview stream some drivers expose; falls back to the record stream.</summary>
+    private static MediaFrameSource? FindColorFrameSource(MediaCapture media)
+    {
+        var preview = media.FrameSources.Values.FirstOrDefault(source =>
+            source.Info.MediaStreamType == MediaStreamType.VideoPreview
+            && source.Info.SourceKind == MediaFrameSourceKind.Color);
+        if (preview != null)
+            return preview;
+
+        return media.FrameSources.Values.FirstOrDefault(source =>
+            source.Info.MediaStreamType == MediaStreamType.VideoRecord
+            && source.Info.SourceKind == MediaFrameSourceKind.Color);
     }
 
     /// <summary>Picks the largest preview format at or under 720p and 30 fps, preferring uncompressed formats
