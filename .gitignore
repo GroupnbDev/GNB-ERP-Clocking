@@ -1,0 +1,12 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+.DS_Store
+
+# Kiosk secrets — never commit
+.env
+appsettings.Local.json
+clockkiosk.settings.json

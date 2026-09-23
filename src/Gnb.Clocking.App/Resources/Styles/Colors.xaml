@@ -1,0 +1,21 @@
+﻿<?xml version="1.0" encoding="UTF-8" ?>
+<ResourceDictionary xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+
+    <!-- Palette taken from https://groupnb.ca/ only: Kadence globals, the brand reds and the site green. No orange. -->
+    <!-- Surfaces are translucent so the animated aurora shows through the glass panels.
+         AppearanceSettings.RefreshColors swaps these for the active theme. -->
+    <Color x:Key="Canvas">#F7FAFC</Color>
+    <Color x:Key="Stage">#B8FFFFFF</Color>
+    <Color x:Key="Glass">#E6FFFFFF</Color>
+    <Color x:Key="Ink">#1A202C</Color>
+    <Color x:Key="Muted">#4A5568</Color>
+    <Color x:Key="Faint">#718096</Color>
+    <Color x:Key="Line">#1A1A202C</Color>
+    <Color x:Key="Brand">#AB1100</Color>
+    <Color x:Key="Highlight">#C70000</Color>
+    <Color x:Key="Danger">#C70000</Color>
+    <Color x:Key="DangerSoft">#C70000</Color>
+    <Color x:Key="Success">#28A745</Color>
+
+</ResourceDictionary>
