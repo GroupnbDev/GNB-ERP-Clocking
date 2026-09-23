@@ -6,6 +6,7 @@ using Gnb.Clocking.App.ViewModels;
 using Gnb.Clocking.Application.Clocking;
 using Gnb.Clocking.Infrastructure;
 using Microsoft.Extensions.Logging;
+using Microsoft.Maui.LifecycleEvents;
 #if MACCATALYST
 using Gnb.Clocking.App.Platforms.MacCatalyst;
 #elif WINDOWS
@@ -32,6 +33,12 @@ public static class MauiProgram
 				handlers.AddHandler<ClockCameraView, MacClockCameraHandler>();
 #elif WINDOWS
 				handlers.AddHandler<ClockCameraView, WinClockCameraHandler>();
+#endif
+			})
+			.ConfigureLifecycleEvents(events =>
+			{
+#if WINDOWS
+				events.AddWindows(windows => windows.OnWindowCreated(FullScreenToggle.Attach));
 #endif
 			});
 
