@@ -68,8 +68,10 @@ public partial class KioskPage : ContentPage
         {
             Window.Stopped += OnWindowStopped;
             Window.Resumed += OnWindowResumed;
+            Window.Activated += OnWindowActivated;
         }
-        FocusBadge();
+        // The native field is not in the window yet during OnAppearing. Focus on the next turn.
+        Dispatcher.Dispatch(FocusBadge);
     }
 
     protected override void OnDisappearing()
@@ -81,6 +83,7 @@ public partial class KioskPage : ContentPage
         {
             Window.Stopped -= OnWindowStopped;
             Window.Resumed -= OnWindowResumed;
+            Window.Activated -= OnWindowActivated;
         }
         StopAmbient();
         base.OnDisappearing();
@@ -112,7 +115,10 @@ public partial class KioskPage : ContentPage
         Aurora.Resume();
         Halo.Resume();
         StartAmbient();
+        FocusBadge();
     }
+
+    private void OnWindowActivated(object? sender, EventArgs e) => FocusBadge();
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {

@@ -398,7 +398,9 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     private void ReloadPunches()
     {
         var events = _clocking.GetEvents();
+        var today = Now().Date;
         var rows = events
+            .Where(clockEvent => ShowOnLiveList(clockEvent, today))
             .OrderByDescending(clockEvent => clockEvent.At)
             .Select(PunchRow.From)
             .ToArray();
@@ -406,14 +408,24 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         MergePunches(rows);
 
         var count = rows.Length;
-        SessionCaption = count == 0 ? "No punches yet" : count == 1 ? "1 recent event" : $"{count} recent events";
+        SessionCaption = count == 0 ? "No punches yet today" : count == 1 ? "1 event today" : $"{count} events today";
         var open = _clocking.OpenCount;
         OnShiftCaption = open == 0 ? "Nobody on shift" : open == 1 ? "1 on shift" : $"{open} on shift";
         OnShiftCount = open;
 
-        var today = Now().Date;
         ClockInsToday = events.Count(e => e.Action == ClockAction.In && e.At.ToLocalTime().Date == today);
         ClockOutsToday = events.Count(e => e.Action == ClockAction.Out && e.At.ToLocalTime().Date == today);
+    }
+
+    /// <summary>Today's punches, plus a clock-in that still has no clock-out.</summary>
+    private bool ShowOnLiveList(ClockEvent clockEvent, DateTime today)
+    {
+        if (clockEvent.At.ToLocalTime().Date == today)
+            return true;
+
+        return clockEvent.Action == ClockAction.In
+            && _clocking.GetOpenClockIn(clockEvent.CandidateId) is DateTimeOffset open
+            && open.UtcDateTime == clockEvent.At.UtcDateTime;
     }
 
     /// <summary>

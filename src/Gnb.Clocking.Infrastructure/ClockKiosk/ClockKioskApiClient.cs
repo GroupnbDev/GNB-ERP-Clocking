@@ -41,7 +41,9 @@ public sealed class ClockKioskApiClient
     internal async Task<BadgeResponse?> GetBadgeAsync(string rfid, CancellationToken cancellationToken)
     {
         using var response = await SendAsync(
-            () => new HttpRequestMessage(HttpMethod.Get, $"api/clock-kiosk/badges/{Uri.EscapeDataString(rfid)}"),
+            () => new HttpRequestMessage(
+                HttpMethod.Get,
+                $"api/clock-kiosk/badges/{Uri.EscapeDataString(rfid)}?utc_offset_minutes={DateTimeOffset.Now.Offset.TotalMinutes.ToString(CultureInfo.InvariantCulture)}"),
             cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
