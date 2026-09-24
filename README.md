@@ -36,7 +36,7 @@ dotnet run --project src\Gnb.Clocking.App -f net9.0-windows10.0.19041.0
 Close the app first, otherwise the exe can't be overwritten.
 
 ```powershell
-dotnet publish src\Gnb.Clocking.App -f net9.0-windows10.0.19041.0 -c Release -o publish\kiosk
+dotnet publish src\Gnb.Clocking.App\Gnb.Clocking.App.csproj -f net9.0-windows10.0.19041.0 -c Release -r win-x64 --self-contained true
 ```
 
 ## Run the published build
@@ -49,8 +49,8 @@ To install on another kiosk PC, copy the whole `publish\kiosk` folder.
 
 ## Keys
 
-| Key | Action |
-| --- | --- |
+| Key | Action             |
+| --- | ------------------ |
 | F11 | Toggle full screen |
 
 ## Tests
