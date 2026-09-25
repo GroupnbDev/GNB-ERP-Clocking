@@ -13,6 +13,8 @@ public partial class KioskPage : ContentPage
     private const int MaxBurstMs = 800;
     private const double ThemeSegmentWidth = 72;
     private const uint ReturnToIdleMs = 3600;
+    private const string HoldNextPersonLoop = "hold-next-person";
+    private const uint HoldWindowMs = (uint)(KioskViewModel.HoldSeconds * 1000);
 
     private static readonly Color Crimson = ScannerHalo.Crimson;
     private static readonly Color Red = ScannerHalo.Red;
@@ -71,6 +73,7 @@ public partial class KioskPage : ContentPage
             Window.Activated += OnWindowActivated;
         }
         // The native field is not in the window yet during OnAppearing. Focus on the next turn.
+        RfidEntry.Unfocused += (_, _) => BadgeEntrySetup.ClaimSoon();
         Dispatcher.Dispatch(FocusBadge);
     }
 
@@ -247,13 +250,58 @@ public partial class KioskPage : ContentPage
     {
         if (!RfidEntry.IsFocused)
             RfidEntry.Focus();
+        BadgeEntrySetup.ClaimSoon();
     }
 
-    private async void ConfirmResetClicked(object? sender, EventArgs e) =>
-        await _viewModel.ConfirmResetAsync();
+    /// <summary>
+    /// Cooldown card: a tap that came too soon. Amber, not green or red — nothing was saved and
+    /// nothing went wrong. The bar runs for the same window the card stays up.
+    /// </summary>
+    private async Task ShowHoldAsync()
+    {
+        if (HoldOverlay.IsVisible)
+            return;
 
-    private void DeclineResetClicked(object? sender, EventArgs e) =>
-        _viewModel.DeclineReset();
+        HoldOverlay.CancelAnimations();
+        HoldCard.CancelAnimations();
+        HoldAutoFill.CancelAnimations();
+
+        HoldOverlay.IsVisible = true;
+        HoldScrim.Opacity = 0;
+        HoldCard.Opacity = 0;
+        HoldCard.Scale = 0.94;
+        HoldCard.TranslationY = 26;
+        HoldAutoFill.ScaleX = 1;
+
+        if (MotionSettings.IsLite)
+            HoldNextPersonPulse.Opacity = 0;
+        else
+            Ripple(HoldNextPersonPulse, HoldNextPersonLoop, 1800, 1.55);
+
+        _ = HoldAutoFill.ScaleXTo(0, HoldWindowMs, Easing.Linear);
+        await Task.WhenAll(
+            HoldScrim.FadeTo(0.72, 200, Easing.CubicOut),
+            HoldCard.FadeTo(1, 220, Easing.CubicOut),
+            HoldCard.ScaleTo(1, 420, Easing.SpringOut),
+            HoldCard.TranslateTo(0, 0, 420, Easing.CubicOut));
+        FocusBadge();
+    }
+
+    private async Task HideHoldAsync()
+    {
+        if (!HoldOverlay.IsVisible)
+            return;
+
+        HoldAutoFill.CancelAnimations();
+        HoldNextPersonPulse.AbortAnimation(HoldNextPersonLoop);
+        HoldNextPersonPulse.Scale = 1;
+        HoldNextPersonPulse.Opacity = 0;
+        await Task.WhenAll(
+            HoldScrim.FadeTo(0, 160, Easing.CubicIn),
+            HoldCard.FadeTo(0, 160, Easing.CubicIn),
+            HoldCard.ScaleTo(0.96, 160, Easing.CubicIn));
+        HoldOverlay.IsVisible = false;
+    }
 
     // ------------------------------------------------------------------ Phase choreography
 
@@ -269,6 +317,7 @@ public partial class KioskPage : ContentPage
         {
             case KioskPhase.Reading:
                 Halo.SetMode(HaloMode.Reading);
+                await HideHoldAsync();
                 Aurora.Flash(Crimson);
                 HideBanner();
                 await Task.WhenAll(HideSuccessAsync(), HideAsync(IdentityChip));
@@ -279,21 +328,23 @@ public partial class KioskPage : ContentPage
             case KioskPhase.Capturing:
             case KioskPhase.Recognized:
                 Halo.SetMode(HaloMode.Capturing);
+                await HideHoldAsync();
                 HideBanner();
                 StartScanLine();
                 await ShowIdentityAsync();
                 _ = FlashShutterWhenCapturedAsync(motion);
                 break;
 
-            case KioskPhase.ConfirmReset:
+            case KioskPhase.Hold:
                 Halo.SetMode(HaloMode.Capturing);
                 HideBanner();
                 StopScanLine();
-                await ShowIdentityAsync();
+                await ShowHoldAsync();
                 break;
 
             case KioskPhase.Success:
                 Halo.SetMode(HaloMode.Success);
+                await HideHoldAsync();
                 Aurora.Flash(Green);
                 HideBanner();
                 StopScanLine();
@@ -306,6 +357,7 @@ public partial class KioskPage : ContentPage
 
             case KioskPhase.Unknown:
                 Halo.SetMode(HaloMode.Error);
+                await HideHoldAsync();
                 Aurora.Flash(Alarm);
                 StopScanLine();
                 PaintCameraRing(Alarm);
@@ -318,6 +370,7 @@ public partial class KioskPage : ContentPage
 
             default:
                 Halo.SetMode(HaloMode.Idle);
+                await HideHoldAsync();
                 HideBanner();
                 StopScanLine();
                 PaintCameraRing(null);
@@ -592,7 +645,7 @@ public partial class KioskPage : ContentPage
         {
             KioskPhase.Reading => ("Reading badge", Crimson),
             KioskPhase.Capturing or KioskPhase.Recognized => ("Capturing photo", Crimson),
-            KioskPhase.ConfirmReset => ("Confirm reset", Crimson),
+            KioskPhase.Hold => ("Please wait", Color.FromArgb("#3B4A5C")),
             KioskPhase.Success => ("Punch saved", Green),
             KioskPhase.Unknown => ("Needs attention", Alarm),
             _ => ("Ready", Crimson),
@@ -605,7 +658,7 @@ public partial class KioskPage : ContentPage
         PhaseChip.Stroke = color;
         PhaseDot.AbortAnimation("phase-dot");
         PhaseDot.Opacity = 1;
-        if (phase is KioskPhase.Idle or KioskPhase.Reading or KioskPhase.Capturing or KioskPhase.Recognized or KioskPhase.ConfirmReset)
+        if (phase is KioskPhase.Idle or KioskPhase.Reading or KioskPhase.Capturing or KioskPhase.Recognized or KioskPhase.Hold)
             LoopPulse(PhaseDot, "phase-dot", phase == KioskPhase.Idle ? 1600u : 600u, 1, 0.25);
 
         // Which step is active, and where a failure happened.
@@ -755,6 +808,7 @@ public partial class KioskPage : ContentPage
         if (e.Parameter is string choice)
             AppearanceSettings.Set(choice);
         PaintTheme(animate: true);
+        BadgeEntrySetup.ClaimSoon();
     }
 
     private void OnRequestedThemeChanged(object? sender, AppThemeChangedEventArgs e)

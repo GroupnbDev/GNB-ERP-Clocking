@@ -15,7 +15,7 @@ public static class BadgeEntrySetup
 {
     private static UITextField? _field;
     private static bool _watching;
-    private static int _attempts;
+    private static bool _watchingLoop;
 
     public static void Configure()
     {
@@ -30,50 +30,123 @@ public static class BadgeEntrySetup
                 _field.EditingDidEnd -= OnEditingEnded;
             _field = field;
             field.EditingDidEnd += OnEditingEnded;
+            // Tab and button clicks must not leave the reader field while this app is in front.
+            field.ShouldEndEditing = _ =>
+                UIApplication.SharedApplication.ApplicationState != UIApplicationState.Active;
             ClaimSoon();
+            Watch();
         });
 
         if (_watching)
             return;
         _watching = true;
-        NSNotificationCenter.DefaultCenter.AddObserver(UIApplication.DidBecomeActiveNotification, _ => ClaimSoon());
+        NSNotificationCenter.DefaultCenter.AddObserver(UIApplication.DidBecomeActiveNotification, _ =>
+        {
+            ActivateApp();
+            ClaimSoon();
+        });
         NSNotificationCenter.DefaultCenter.AddObserver(UIWindow.DidBecomeKeyNotification, _ => ClaimSoon());
     }
 
+    /// <summary>Pull the keyboard back after a click, Tab, or returning from another app.</summary>
+    public static void ClaimSoon() => DispatchQueue.MainQueue.DispatchAsync(Claim);
+
     private static void OnEditingEnded(object? sender, EventArgs e) => ClaimSoon();
 
-    private static void ClaimSoon()
+    private static void Watch()
     {
-        _attempts = 0;
-        DispatchQueue.MainQueue.DispatchAsync(Claim);
+        if (_watchingLoop)
+            return;
+        _watchingLoop = true;
+        DispatchQueue.MainQueue.DispatchAfter(new DispatchTime(DispatchTime.Now, TimeSpan.FromMilliseconds(200)), Tick);
+    }
+
+    private static void Tick()
+    {
+        if (UIApplication.SharedApplication.ApplicationState == UIApplicationState.Active)
+            Claim();
+        DispatchQueue.MainQueue.DispatchAfter(new DispatchTime(DispatchTime.Now, TimeSpan.FromMilliseconds(200)), Tick);
     }
 
     private static void Claim()
     {
         UITextField? field = _field;
-        if (field == null || field.IsFirstResponder)
+        if (field == null)
             return;
-        if (_attempts++ > 30)
+        if (UIApplication.SharedApplication.ApplicationState != UIApplicationState.Active)
             return;
-
-        ActivateApp();
 
         UIWindow? window = field.Window ?? KeyWindow();
         if (window == null)
-        {
-            Retry();
             return;
-        }
 
         if (!window.IsKeyWindow)
             window.MakeKeyAndVisible();
 
-        if (!field.BecomeFirstResponder())
-            Retry();
+        // Mac keyboard focus is the AppKit key view. UIKit can still say this field is
+        // first responder after Tab or a theme click moved the real key view away.
+        if (!IsAppKitKeyView(field))
+        {
+            field.BecomeFirstResponder();
+            MakeAppKitFirstResponder(field);
+        }
     }
 
-    private static void Retry() =>
-        DispatchQueue.MainQueue.DispatchAfter(new DispatchTime(DispatchTime.Now, TimeSpan.FromMilliseconds(200)), Claim);
+    private static bool IsAppKitKeyView(UITextField field)
+    {
+        IntPtr nsView = NsView(field);
+        IntPtr nsWindow = NsWindow(nsView);
+        if (nsView == IntPtr.Zero || nsWindow == IntPtr.Zero)
+            return field.IsFirstResponder;
+
+        IntPtr first = IntPtr_objc_msgSend(nsWindow, Selector.GetHandle("firstResponder"));
+        if (first == nsView)
+            return true;
+
+        if (!Responds(nsView, "currentEditor"))
+            return false;
+        IntPtr editor = IntPtr_objc_msgSend(nsView, Selector.GetHandle("currentEditor"));
+        return editor != IntPtr.Zero && first == editor;
+    }
+
+    private static void MakeAppKitFirstResponder(UITextField field)
+    {
+        IntPtr nsView = NsView(field);
+        IntPtr nsWindow = NsWindow(nsView);
+        if (nsView == IntPtr.Zero || nsWindow == IntPtr.Zero)
+            return;
+
+        if (Responds(nsWindow, "makeFirstResponder:"))
+            void_objc_msgSend_IntPtr(nsWindow, Selector.GetHandle("makeFirstResponder:"), nsView);
+        if (Responds(nsWindow, "setAutorecalculatesKeyViewLoop:"))
+            void_objc_msgSend_bool(nsWindow, Selector.GetHandle("setAutorecalculatesKeyViewLoop:"), false);
+        if (Responds(nsView, "setNextKeyView:"))
+            void_objc_msgSend_IntPtr(nsView, Selector.GetHandle("setNextKeyView:"), nsView);
+    }
+
+    private static IntPtr NsView(UIView view)
+    {
+        if (view.RespondsToSelector(new Selector("nsView")))
+            return IntPtr_objc_msgSend(view.Handle, Selector.GetHandle("nsView"));
+        if (view.RespondsToSelector(new Selector("_nsView")))
+            return IntPtr_objc_msgSend(view.Handle, Selector.GetHandle("_nsView"));
+        return IntPtr.Zero;
+    }
+
+    private static bool Responds(IntPtr obj, string selector)
+    {
+        if (obj == IntPtr.Zero)
+            return false;
+        IntPtr cls = object_getClass(obj);
+        return cls != IntPtr.Zero && class_respondsToSelector(cls, Selector.GetHandle(selector));
+    }
+
+    private static IntPtr NsWindow(IntPtr nsView)
+    {
+        if (nsView == IntPtr.Zero)
+            return IntPtr.Zero;
+        return IntPtr_objc_msgSend(nsView, Selector.GetHandle("window"));
+    }
 
     private static UIWindow? KeyWindow()
     {
@@ -118,4 +191,13 @@ public static class BadgeEntrySetup
 
     [DllImport("/usr/lib/libobjc.dylib", EntryPoint = "objc_msgSend")]
     private static extern void void_objc_msgSend_bool(IntPtr receiver, IntPtr selector, bool arg);
+
+    [DllImport("/usr/lib/libobjc.dylib", EntryPoint = "objc_msgSend")]
+    private static extern void void_objc_msgSend_IntPtr(IntPtr receiver, IntPtr selector, IntPtr arg);
+
+    [DllImport("/usr/lib/libobjc.dylib")]
+    private static extern IntPtr object_getClass(IntPtr obj);
+
+    [DllImport("/usr/lib/libobjc.dylib")]
+    private static extern bool class_respondsToSelector(IntPtr cls, IntPtr sel);
 }

@@ -1,5 +1,6 @@
 using Gnb.Clocking.Application.Clocking;
 using Gnb.Clocking.Infrastructure.ClockKiosk;
+using Gnb.Clocking.Infrastructure.ClockKiosk.Offline;
 using Gnb.Clocking.Infrastructure.Photos;
 using Gnb.Clocking.Infrastructure.Time;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,6 +20,9 @@ public static class ClockingServiceCollectionExtensions
         services.AddSingleton(options);
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<KioskShiftCache>();
+        // One SQLite file next to the photos: queued punches, cached roster, measured clock skew.
+        services.AddSingleton(new OfflineClockStore(Path.Combine(options.PhotoRoot, "clock-queue.db3")));
+        services.AddSingleton<ClockSyncWorker>();
         services.AddSingleton(provider => new ClockKioskApiClient(new HttpClient(), provider.GetRequiredService<ClockKioskApiOptions>()));
         services.AddSingleton(new FileClockPhotoStore(options.PhotoRoot));
         services.AddSingleton<ICandidateBadgeDirectory, HttpCandidateBadgeDirectory>();

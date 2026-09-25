@@ -55,6 +55,7 @@ public sealed class ClockKioskApiClient
         string rfid,
         bool isClockOut,
         string localJpegPath,
+        DateTimeOffset? localTime,
         CancellationToken cancellationToken)
     {
         var jpeg = await File.ReadAllBytesAsync(localJpegPath, cancellationToken).ConfigureAwait(false);
@@ -67,6 +68,8 @@ public sealed class ClockKioskApiClient
                 { photo, "photo", ClockPhotoPaths.FileName(isClockOut) },
                 { new StringContent(rfid), "rfid" },
                 { new StringContent(isClockOut ? "true" : "false"), "is_clock_out" },
+                // The capture time picks the Records/{day} folder, so a late upload still lands on the punch day.
+                { new StringContent((localTime ?? DateTimeOffset.Now).ToString("o")), "local_time" },
             };
             return new HttpRequestMessage(HttpMethod.Post, "api/clock-kiosk/photos") { Content = form };
         }, cancellationToken).ConfigureAwait(false);
@@ -79,17 +82,38 @@ public sealed class ClockKioskApiClient
         string rfid,
         string imagePath,
         bool resetCompletedDay,
+        string? clientPunchId,
+        DateTimeOffset? localTime,
+        bool capturedOffline,
+        int? clockSkewSeconds,
         CancellationToken cancellationToken)
     {
         var route = isClockOut ? "api/clock-kiosk/clock-out" : "api/clock-kiosk/clock-in";
         using var response = await SendAsync(
             () => new HttpRequestMessage(HttpMethod.Post, route)
             {
-                Content = JsonContent.Create(new ClockRequest(rfid, imagePath, resetCompletedDay, DateTimeOffset.Now)),
+                Content = JsonContent.Create(new ClockRequest(
+                    rfid,
+                    imagePath,
+                    resetCompletedDay,
+                    localTime ?? DateTimeOffset.Now,
+                    clientPunchId,
+                    capturedOffline,
+                    clockSkewSeconds)),
             },
             cancellationToken).ConfigureAwait(false);
 
         return await ReadAsync<ClockActionResponse>(response, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Roster the device caches so a scan still resolves to a person while the link is down.</summary>
+    internal async Task<RosterResponse> GetRosterAsync(CancellationToken cancellationToken)
+    {
+        using var response = await SendAsync(
+            () => new HttpRequestMessage(HttpMethod.Get, "api/clock-kiosk/roster"),
+            cancellationToken).ConfigureAwait(false);
+
+        return await ReadAsync<RosterResponse>(response, cancellationToken).ConfigureAwait(false);
     }
 
     internal async Task<SessionsResponse> GetSessionsAsync(int take, CancellationToken cancellationToken)
@@ -108,7 +132,7 @@ public sealed class ClockKioskApiClient
         CancellationToken cancellationToken)
     {
         if (!_configured)
-            throw new ClockingException(NotConfiguredMessage);
+            throw new ClockOfflineException(NotConfiguredMessage);
 
         using var request = createRequest();
         try
@@ -117,11 +141,11 @@ public sealed class ClockKioskApiClient
         }
         catch (HttpRequestException)
         {
-            throw new ClockingException(UnreachableMessage);
+            throw new ClockOfflineException(UnreachableMessage);
         }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new ClockingException(UnreachableMessage);
+            throw new ClockOfflineException(UnreachableMessage);
         }
     }
 
@@ -131,11 +155,19 @@ public sealed class ClockKioskApiClient
             return;
 
         var serverMessage = await ReadErrorAsync(response, cancellationToken).ConfigureAwait(false);
+        // Busy or broken server: retryable, so the punch goes to the queue rather than being refused.
+        if (response.StatusCode == HttpStatusCode.TooManyRequests || (int)response.StatusCode >= 500)
+        {
+            throw new ClockOfflineException(
+                response.StatusCode == HttpStatusCode.TooManyRequests
+                    ? "The clock server is busy. The punch is saved on this device."
+                    : "The clock server is having trouble. The punch is saved on this device.");
+        }
+
         var message = response.StatusCode switch
         {
             HttpStatusCode.NotFound => UnknownBadgeMessage,
             HttpStatusCode.Unauthorized => "The clock server rejected this kiosk's key.",
-            HttpStatusCode.TooManyRequests => "The clock server is busy. Try again in a minute.",
             _ when !string.IsNullOrWhiteSpace(serverMessage) => serverMessage,
             _ => $"The clock server returned {(int)response.StatusCode}.",
         };

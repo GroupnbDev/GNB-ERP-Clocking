@@ -20,6 +20,11 @@ public sealed class PunchRow
     /// <summary>True for a punch that arrived after the first load; the list animates it in once.</summary>
     public bool IsFresh { get; set; }
 
+    /// <summary>Saved on this device but not yet accepted by the server.</summary>
+    public bool ShowSyncNote { get; init; }
+    public string SyncNote { get; init; } = string.Empty;
+    public Color SyncNoteColor { get; init; } = Colors.Transparent;
+
     public static PunchRow From(ClockEvent clockEvent)
     {
         var arrived = clockEvent.Action == ClockAction.In;
@@ -28,12 +33,18 @@ public sealed class PunchRow
             : clockEvent.Assignment;
 
         var accent = Color.FromArgb(arrived ? "#C70000" : "#718096");
+        var pending = clockEvent.PendingSync || clockEvent.NeedsAttention;
         return new PunchRow
         {
             Key = $"{clockEvent.CandidateId}|{clockEvent.Action}|{clockEvent.At.UtcTicks}",
+            ShowSyncNote = pending,
+            SyncNote = clockEvent.NeedsAttention ? "Needs attention" : "Saved here, not synced",
+            SyncNoteColor = Color.FromArgb(clockEvent.NeedsAttention ? "#C70000" : "#F59E0B"),
             Initials = clockEvent.Initials,
             Name = clockEvent.CandidateName,
-            Action = arrived ? "Clock in" : "Clock out",
+            Action = clockEvent.IsExtra
+                ? arrived ? "Extra in" : "Extra out"
+                : arrived ? "Clock in" : "Clock out",
             Time = clockEvent.At.ToLocalTime().ToString("h:mm tt"),
             Detail = detail,
             Accent = accent,

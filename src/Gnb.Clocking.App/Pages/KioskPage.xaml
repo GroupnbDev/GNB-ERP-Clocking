@@ -55,6 +55,15 @@
                         <Border x:Name="ServerDot" WidthRequest="8" HeightRequest="8" StrokeThickness="0"
                                 StrokeShape="RoundRectangle 4" BackgroundColor="#718096" VerticalOptions="Center" />
                         <Label Text="{Binding ServerCaption}" FontSize="14" TextColor="{DynamicResource Muted}" VerticalOptions="Center" />
+                        <!-- Only visible when punches are waiting on this device. -->
+                        <BoxView WidthRequest="1" HeightRequest="16" Color="{DynamicResource Line}" VerticalOptions="Center"
+                                 IsVisible="{Binding HasOfflineWork}" />
+                        <Border IsVisible="{Binding HasOfflineWork}" Padding="10,4" StrokeThickness="1"
+                                StrokeShape="RoundRectangle 12" BackgroundColor="#33F59E0B" Stroke="#F59E0B"
+                                VerticalOptions="Center">
+                            <Label Text="{Binding OfflineCaption}" FontFamily="OpenSansSemibold" FontSize="13"
+                                   TextColor="#F59E0B" VerticalOptions="Center" />
+                        </Border>
                     </HorizontalStackLayout>
                 </Border>
 
@@ -250,22 +259,12 @@
                         </Grid>
 
                         <!-- Prompt / result copy and the progress stepper. Fixed height so the camera never jumps. -->
-                        <Grid Grid.Row="2" RowDefinitions="*,Auto" HeightRequest="230" RowSpacing="12">
-                            <VerticalStackLayout x:Name="PromptStack" Spacing="4" VerticalOptions="Center">
-                                <Label Text="{Binding Prompt}" FontFamily="OpenSansSemibold" FontSize="30"
+                        <Grid Grid.Row="2" RowDefinitions="*,Auto" HeightRequest="340" RowSpacing="8">
+                            <VerticalStackLayout x:Name="PromptStack" Spacing="2" VerticalOptions="Center">
+                                <Label Text="{Binding Prompt}" FontFamily="OpenSansSemibold" FontSize="28"
                                        HorizontalTextAlignment="Center" />
-                                <Label Text="{Binding PromptDetail}" FontSize="16" TextColor="{DynamicResource Muted}"
+                                <Label Text="{Binding PromptDetail}" FontSize="18" TextColor="{DynamicResource Ink}"
                                        HorizontalTextAlignment="Center" />
-                                <HorizontalStackLayout IsVisible="{Binding ShowResetConfirm}" Spacing="12"
-                                                       HorizontalOptions="Center" Margin="0,14,0,0">
-                                    <Button Text="I'm done for today" Clicked="DeclineResetClicked"
-                                            BackgroundColor="Transparent" TextColor="{DynamicResource Ink}"
-                                            BorderColor="{DynamicResource Line}" BorderWidth="1"
-                                            CornerRadius="14" Padding="18,10" FontFamily="OpenSansSemibold" />
-                                    <Button Text="Reset clock in and out" Clicked="ConfirmResetClicked"
-                                            BackgroundColor="{StaticResource Brand}" TextColor="#FFFFFF"
-                                            CornerRadius="14" Padding="18,10" FontFamily="OpenSansSemibold" />
-                                </HorizontalStackLayout>
                             </VerticalStackLayout>
 
                             <VerticalStackLayout x:Name="SuccessPanel" IsVisible="False" Spacing="0" VerticalOptions="Center">
@@ -275,6 +274,12 @@
                                        HorizontalTextAlignment="Center" Margin="0,-6,0,-4" />
                                 <Label Text="{Binding SuccessDetail}" FontSize="16" TextColor="{DynamicResource Muted}"
                                        HorizontalTextAlignment="Center" />
+                                <Border IsVisible="{Binding SuccessSavedHere}" Padding="12,6" Margin="0,8,0,0"
+                                        StrokeThickness="1" StrokeShape="RoundRectangle 14"
+                                        BackgroundColor="#33F59E0B" Stroke="#F59E0B" HorizontalOptions="Center">
+                                    <Label Text="Saved on this clock — it will sync when the office is back"
+                                           FontFamily="OpenSansSemibold" FontSize="14" TextColor="#F59E0B" />
+                                </Border>
                                 <Grid WidthRequest="220" HeightRequest="4" Margin="0,12,0,0" HorizontalOptions="Center">
                                     <BoxView Color="{DynamicResource Line}" CornerRadius="2" />
                                     <BoxView x:Name="CountdownFill" Color="{StaticResource Success}" CornerRadius="2" AnchorX="0" />
@@ -404,6 +409,14 @@
                                                            LineBreakMode="TailTruncation" />
                                                     <Label Text="{Binding Detail}" FontSize="13" TextColor="{DynamicResource Faint}"
                                                            LineBreakMode="TailTruncation" />
+                                                    <!-- Captured here during an outage: the shift is real, the server just has not seen it. -->
+                                                    <HorizontalStackLayout Spacing="6" IsVisible="{Binding ShowSyncNote}">
+                                                        <Border WidthRequest="6" HeightRequest="6" StrokeThickness="0"
+                                                                StrokeShape="RoundRectangle 3" BackgroundColor="{Binding SyncNoteColor}"
+                                                                VerticalOptions="Center" />
+                                                        <Label Text="{Binding SyncNote}" FontFamily="OpenSansSemibold" FontSize="12"
+                                                               TextColor="{Binding SyncNoteColor}" />
+                                                    </HorizontalStackLayout>
                                                 </VerticalStackLayout>
                                                 <VerticalStackLayout Grid.Column="2" VerticalOptions="Center" Spacing="4">
                                                     <Label Text="{Binding Time}" FontFamily="OpenSansSemibold" FontSize="15"
@@ -431,6 +444,90 @@
                 <Label Grid.Column="1" Text="Scan only  ·  No manual clock in or clock out  ·  Times cannot be edited"
                        FontSize="13" TextColor="{DynamicResource Faint}" VerticalOptions="Center" />
             </Grid>
+        </Grid>
+
+        <!-- ============ Cooldown: this tap is too soon ============ -->
+        <Grid x:Name="HoldOverlay" IsVisible="False">
+            <BoxView x:Name="HoldScrim" Color="#0B0F16" Opacity="0" />
+
+            <Border x:Name="HoldCard" HorizontalOptions="Center" VerticalOptions="Center"
+                    MaximumWidthRequest="720" Padding="36,30,36,26" StrokeThickness="2"
+                    BackgroundColor="{DynamicResource Canvas}" Stroke="#F59E0B"
+                    StrokeShape="RoundRectangle 34">
+                <Border.Shadow>
+                    <Shadow Brush="#000000" Opacity="0.55" Radius="60" Offset="0,18" />
+                </Border.Shadow>
+
+                <VerticalStackLayout Spacing="18">
+
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16">
+                        <Border WidthRequest="58" HeightRequest="58" StrokeThickness="0"
+                                StrokeShape="RoundRectangle 18" BackgroundColor="#F59E0B" VerticalOptions="Center">
+                            <Label Text="!" FontFamily="OpenSansSemibold" FontSize="30" TextColor="#1A202C"
+                                   HorizontalTextAlignment="Center" VerticalTextAlignment="Center" />
+                        </Border>
+                        <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
+                            <Label Text="{Binding CandidateName}" FontFamily="OpenSansSemibold" FontSize="24"
+                                   LineBreakMode="TailTruncation" />
+                            <Label Text="{Binding AssignmentLine}" FontSize="14" TextColor="{DynamicResource Muted}"
+                                   LineBreakMode="TailTruncation" />
+                        </VerticalStackLayout>
+                    </Grid>
+
+                    <BoxView HeightRequest="1" Color="{DynamicResource Line}" />
+
+                    <VerticalStackLayout Spacing="8">
+                        <Label Text="{Binding HoldTitle}" FontFamily="OpenSansSemibold" FontSize="34"
+                               HorizontalTextAlignment="Center" />
+                        <Label Text="{Binding HoldSince}" FontSize="18" TextColor="{DynamicResource Muted}"
+                               HorizontalTextAlignment="Center" />
+                    </VerticalStackLayout>
+
+                    <!-- The one line that matters: when they may tap again. -->
+                    <Border Padding="24,16" StrokeThickness="0" StrokeShape="RoundRectangle 20"
+                            BackgroundColor="#F59E0B" HorizontalOptions="Center">
+                        <Label Text="{Binding HoldReady}" FontFamily="OpenSansSemibold" FontSize="24"
+                               TextColor="#1A202C" HorizontalTextAlignment="Center" />
+                    </Border>
+
+                    <Label Text="Nothing was saved for this tap. Your earlier punch still stands."
+                           FontSize="15" TextColor="{DynamicResource Muted}" HorizontalTextAlignment="Center" />
+
+                    <Border x:Name="HoldNextPersonStrip" Padding="16,13" StrokeThickness="2"
+                            StrokeShape="RoundRectangle 20" BackgroundColor="{DynamicResource Glass}"
+                            Stroke="{StaticResource Brand}">
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
+                            <Grid WidthRequest="44" HeightRequest="44" VerticalOptions="Center">
+                                <Border x:Name="HoldNextPersonPulse" WidthRequest="44" HeightRequest="44"
+                                        StrokeThickness="0" StrokeShape="RoundRectangle 14"
+                                        BackgroundColor="{StaticResource Brand}"
+                                        HorizontalOptions="Center" VerticalOptions="Center" />
+                                <Border WidthRequest="44" HeightRequest="44" StrokeThickness="0"
+                                        StrokeShape="RoundRectangle 14" HorizontalOptions="Center" VerticalOptions="Center">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="{StaticResource Brand}" Offset="0" />
+                                            <GradientStop Color="{StaticResource Highlight}" Offset="1" />
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <Label Text="ID" FontFamily="OpenSansSemibold" FontSize="15" TextColor="#FFFFFF"
+                                           HorizontalTextAlignment="Center" VerticalTextAlignment="Center" />
+                                </Border>
+                            </Grid>
+                            <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="1">
+                                <Label Text="Next person: tap your badge now" FontFamily="OpenSansSemibold" FontSize="19" />
+                                <Label Text="The reader is live. This message closes on its own."
+                                       FontSize="15" TextColor="{DynamicResource Muted}" />
+                            </VerticalStackLayout>
+                        </Grid>
+                    </Border>
+
+                    <Grid HeightRequest="6" WidthRequest="280" HorizontalOptions="Center">
+                        <BoxView Color="{DynamicResource Line}" CornerRadius="3" />
+                        <BoxView x:Name="HoldAutoFill" Color="#F59E0B" CornerRadius="3" AnchorX="0" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
         </Grid>
     </Grid>
 </ContentPage>

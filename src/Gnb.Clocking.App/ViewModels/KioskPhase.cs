@@ -6,7 +6,7 @@ public enum KioskPhase
     Reading,
     Capturing,
     Recognized,
-    ConfirmReset,
+    Hold,
     Success,
     Unknown
 }

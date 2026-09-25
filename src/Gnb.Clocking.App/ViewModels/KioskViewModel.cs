@@ -22,7 +22,17 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     private readonly IClockCamera _camera;
     private readonly IClockPhotoStore _photos;
     private CandidateBadge? _badge;
-    private string _resetPromptDetail = "Reset today's clock in and out?";
+    private const int ClockInCooldownMinutes = 30;
+    private const int ClockOutCooldownMinutes = 15;
+    private readonly Dictionary<int, DateTimeOffset> _lastClockOut = new();
+
+    /// <summary>Seconds the cooldown card stays up. Long enough to read the time it names.</summary>
+    public const double HoldSeconds = 6;
+
+    private string _holdTitle = "Please wait";
+    private string _holdDetail = string.Empty;
+    private string _holdSince = string.Empty;
+    private string _holdReady = string.Empty;
     private int _returnTicket;
     private bool _started;
     private bool _busy;
@@ -65,6 +75,11 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     private string _serverCaption = "Connecting";
     private string _connectionCaption = "Connecting to the GroupNB clock server";
     private bool _punchesLoaded;
+    private int _pendingSyncCount;
+    private int _parkedCount;
+    private string _offlineCaption = string.Empty;
+    private bool _hasOfflineWork;
+    private bool _successSavedHere;
 
     public KioskViewModel(
         ICandidateBadgeDirectory directory,
@@ -103,21 +118,23 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             {
                 KioskPhase.Reading => "Reading badge",
                 KioskPhase.Capturing => "Look at the camera",
-                KioskPhase.ConfirmReset => "Already finished today",
+                KioskPhase.Hold => _holdTitle,
                 _ => "Hold a badge to the reader"
             };
             PromptDetail = value switch
             {
                 KioskPhase.Reading => "Matching it to a GroupNB candidate",
                 KioskPhase.Capturing => "Hold still. This frame is saved with the punch.",
-                KioskPhase.ConfirmReset => _resetPromptDetail,
+                KioskPhase.Hold => _holdDetail,
                 _ => "A scan saves this frame. Times cannot be edited."
             };
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ShowResetConfirm)));
         }
     }
 
-    public bool ShowResetConfirm => Phase == KioskPhase.ConfirmReset;
+    /// <summary>Cooldown card: the punch that blocks this tap, and when the next tap is allowed.</summary>
+    public string HoldTitle { get => _holdTitle; private set => SetProperty(ref _holdTitle, value); }
+    public string HoldSince { get => _holdSince; private set => SetProperty(ref _holdSince, value); }
+    public string HoldReady { get => _holdReady; private set => SetProperty(ref _holdReady, value); }
 
     public string BadgeText { get => _badgeText; set => SetProperty(ref _badgeText, value); }
     public string Prompt { get => _prompt; private set => SetProperty(ref _prompt, value); }
@@ -155,6 +172,14 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     public string ServerCaption { get => _serverCaption; private set => SetProperty(ref _serverCaption, value); }
     public string ConnectionCaption { get => _connectionCaption; private set => SetProperty(ref _connectionCaption, value); }
 
+    /// <summary>Punches sitting on this device, and the ones the server refused when they synced.</summary>
+    public int PendingSyncCount { get => _pendingSyncCount; private set => SetProperty(ref _pendingSyncCount, value); }
+    public int ParkedCount { get => _parkedCount; private set => SetProperty(ref _parkedCount, value); }
+    public string OfflineCaption { get => _offlineCaption; private set => SetProperty(ref _offlineCaption, value); }
+    public bool HasOfflineWork { get => _hasOfflineWork; private set => SetProperty(ref _hasOfflineWork, value); }
+    /// <summary>This punch is on the device only — the success screen says so rather than implying it synced.</summary>
+    public bool SuccessSavedHere { get => _successSavedHere; private set => SetProperty(ref _successSavedHere, value); }
+
     public void Start()
     {
         if (_started)
@@ -167,7 +192,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             return true;
         });
 
-        _ = RefreshPunchesAsync();
+        _ = PrimeThenRefreshAsync();
         Microsoft.Maui.Controls.Application.Current?.Dispatcher.StartTimer(TimeSpan.FromSeconds(30), () =>
         {
             if (!_busy)
@@ -178,12 +203,12 @@ public sealed class KioskViewModel : INotifyPropertyChanged
 
     public async Task SubmitAsync()
     {
-        if (_busy)
-            return;
-
         var rfid = RfidNormalizer.Normalize(BadgeText);
         BadgeText = string.Empty;
         if (rfid.Length < 8)
+            return;
+
+        if (_busy)
             return;
 
         _returnTicket++;
@@ -191,7 +216,6 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         IsBusy = true;
         ClearError();
         Phase = KioskPhase.Reading;
-        var awaitingConfirm = false;
 
         try
         {
@@ -206,43 +230,36 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             }
 
             Show(badge);
+            var openAt = _clocking.GetOpenClockIn(badge.CandidateId);
+            if (IsOnShift && openAt is DateTimeOffset started && Now() - started < TimeSpan.FromMinutes(ClockInCooldownMinutes))
+            {
+                var ready = started.ToLocalTime().AddMinutes(ClockInCooldownMinutes);
+                ShowHold(
+                    "You're already clocked in",
+                    $"Clocked in at {started.ToLocalTime():h:mm tt}",
+                    $"You can clock out after {ready:h:mm tt}");
+                return;
+            }
+
+            if (LatestClockOut(badge) is DateTimeOffset ended
+                && Now() - ended < TimeSpan.FromMinutes(ClockOutCooldownMinutes)
+                && (openAt is null || openAt.Value <= ended))
+            {
+                var ready = ended.ToLocalTime().AddMinutes(ClockOutCooldownMinutes);
+                ShowHold(
+                    "You're already clocked out",
+                    $"Clocked out at {ended.ToLocalTime():h:mm tt}",
+                    $"You can tap again after {ready:h:mm tt}");
+                return;
+            }
+
             if (!IsOnShift && badge.ShiftFinished)
             {
-                var clockIn = badge.FinishedClockIn?.ToLocalTime().ToString("h:mm tt");
-                var clockOut = badge.FinishedClockOut?.ToLocalTime().ToString("h:mm tt");
-                _resetPromptDetail = clockIn != null && clockOut != null
-                    ? $"In at {clockIn} and out at {clockOut}. Reset today's clock in and out?"
-                    : "Reset today's clock in and out?";
-                awaitingConfirm = true;
-                Phase = KioskPhase.ConfirmReset;
+                await CaptureAndPunchAsync(badge, resetCompletedDay: true);
                 return;
             }
 
             await CaptureAndPunchAsync(badge, resetCompletedDay: false);
-        }
-        catch (ClockingException ex)
-        {
-            UnknownMessage = ex.Message;
-            Phase = KioskPhase.Unknown;
-        }
-        finally
-        {
-            if (!awaitingConfirm)
-            {
-                _busy = false;
-                IsBusy = false;
-            }
-        }
-    }
-
-    public async Task ConfirmResetAsync()
-    {
-        if (Phase != KioskPhase.ConfirmReset || _badge == null)
-            return;
-
-        try
-        {
-            await CaptureAndPunchAsync(_badge, resetCompletedDay: true);
         }
         catch (ClockingException ex)
         {
@@ -256,14 +273,34 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         }
     }
 
-    public void DeclineReset()
+    /// <summary>
+    /// Clock-out that still blocks another tap. A punchcard edit that clears the finished shift wins,
+    /// so the next tap is sent. Right after a punch, the device time covers a badge that has not caught up.
+    /// </summary>
+    private DateTimeOffset? LatestClockOut(CandidateBadge badge)
     {
-        if (Phase != KioskPhase.ConfirmReset)
-            return;
+        if (!IsOnShift && !badge.ShiftFinished)
+        {
+            _lastClockOut.Remove(badge.CandidateId);
+            return null;
+        }
 
-        _busy = false;
-        IsBusy = false;
-        Dismiss();
+        DateTimeOffset? latest = badge.ShiftFinished ? badge.FinishedClockOut : null;
+        if (_lastClockOut.TryGetValue(badge.CandidateId, out DateTimeOffset local) && (latest is null || local > latest))
+            latest = local;
+
+        return latest;
+    }
+
+    private void ShowHold(string title, string since, string ready)
+    {
+        HoldTitle = title;
+        HoldSince = since;
+        HoldReady = ready;
+        _holdDetail = $"{since}. {ready}.";
+        Phase = KioskPhase.Hold;
+        var ticket = ++_returnTicket;
+        _ = ReturnToIdleAsync(ticket, TimeSpan.FromSeconds(HoldSeconds), KioskPhase.Hold);
     }
 
     private async Task CaptureAndPunchAsync(CandidateBadge badge, bool resetCompletedDay)
@@ -287,11 +324,23 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             ? await _clocking.ClockOutAsync(badge, photo)
             : await _clocking.ClockInAsync(badge, photo, resetCompletedDay);
 
-        SuccessTitle = clockEvent.Action == ClockAction.In ? "Clocked in" : "Clocked out";
+        SuccessSavedHere = clockEvent.PendingSync;
+        if (clockEvent.PendingSync)
+            UpdateOfflineCounters();
+        // Say what was actually saved. The server decides in or out, and whether it landed on extra
+        // time, so the screen follows its answer rather than the action this kiosk asked for.
+        var savedIn = clockEvent.Action == ClockAction.In;
+        if (!savedIn)
+            _lastClockOut[badge.CandidateId] = clockEvent.At;
+        SuccessTitle = clockEvent.IsExtra || resetCompletedDay
+            ? savedIn ? "Extra time started" : "Extra time ended"
+            : savedIn ? "Clocked in" : "Clocked out";
         SuccessTime = clockEvent.At.ToLocalTime().ToString("h:mm tt");
-        SuccessDetail = clockEvent.Action == ClockAction.Out && clockEvent.HoursWorked is double hours
-            ? $"{clockEvent.CandidateName} · {hours:0.##}h on shift"
-            : $"{clockEvent.CandidateName} · {clockEvent.Assignment}";
+        SuccessDetail = clockEvent.IsExtra || resetCompletedDay
+            ? $"{clockEvent.CandidateName} · today's saved times stay. This is not added to hours."
+            : !savedIn && clockEvent.HoursWorked is double hours
+                ? $"{clockEvent.CandidateName} · {hours:0.##}h on shift"
+                : $"{clockEvent.CandidateName} · {clockEvent.Assignment}";
         SuccessPhoto = photo.AbsolutePath;
         HasSuccessPhoto = true;
 
@@ -299,7 +348,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         ReloadPunches();
         Phase = KioskPhase.Success;
         var ticket = ++_returnTicket;
-        _ = ReturnToIdleAsync(ticket);
+        _ = ReturnToIdleAsync(ticket, TimeSpan.FromSeconds(3.6), KioskPhase.Success);
     }
 
     public void Dismiss()
@@ -328,20 +377,20 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         StatusDetail = openAt is DateTimeOffset start
             ? $"Since {start.ToLocalTime():h:mm tt}  ·  {Format(Now() - start)} so far"
             : badge.ShiftFinished
-                ? "Today's clock in and out are already saved"
+                ? "Today's times stay. The next tap starts extra time."
                 : "Ready to start a shift";
-        ActionTitle = IsOnShift ? "Clock out" : badge.ShiftFinished ? "Reset shift?" : "Clock in";
+        ActionTitle = IsOnShift ? "Clock out" : badge.ShiftFinished ? "Extra time" : "Clock in";
         ActionHint = IsOnShift
             ? "Closes the open shift"
             : badge.ShiftFinished
-                ? "Ask before clearing today's times"
+                ? "Starts extra time. Today's clock in and clock out stay."
                 : $"Starts {badge.FirstName}'s shift";
     }
 
-    private async Task ReturnToIdleAsync(int ticket)
+    private async Task ReturnToIdleAsync(int ticket, TimeSpan delay, KioskPhase phase)
     {
-        await Task.Delay(TimeSpan.FromSeconds(3.6));
-        if (ticket != _returnTicket || Phase != KioskPhase.Success)
+        await Task.Delay(delay);
+        if (ticket != _returnTicket || Phase != phase)
             return;
 
         Dismiss();
@@ -363,6 +412,23 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             StatusDetail = $"Since {start.ToLocalTime():h:mm tt}  ·  {Format(now - start)} so far";
     }
 
+    /// <summary>Device state first (it needs no link), then the server.</summary>
+    private async Task PrimeThenRefreshAsync()
+    {
+        try
+        {
+            await _clocking.PrimeFromCacheAsync();
+            UpdateOfflineCounters();
+            ReloadPunches();
+        }
+        catch (ClockingException)
+        {
+            // Nothing cached yet; the refresh below will fill it in when the link is up.
+        }
+
+        await RefreshPunchesAsync();
+    }
+
     private async Task RefreshPunchesAsync()
     {
         if (_refreshing)
@@ -372,13 +438,17 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         try
         {
             await _clocking.RefreshAsync();
+            UpdateOfflineCounters();
             MarkOnline();
         }
         catch (ClockingException ex)
         {
             Server = ServerLink.Offline;
-            ServerCaption = "Server offline";
-            ConnectionCaption = ex.Message;
+            ServerCaption = "Offline";
+            UpdateOfflineCounters();
+            ConnectionCaption = PendingSyncCount > 0
+                ? $"Offline — {BuildOfflineCaption(PendingSyncCount, ParkedCount)}. Scans still work."
+                : $"{ex.Message} Scans still work and are saved on this device.";
         }
         finally
         {
@@ -388,10 +458,31 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         ReloadPunches();
     }
 
+    private void UpdateOfflineCounters()
+    {
+        PendingSyncCount = _clocking.PendingCount;
+        ParkedCount = _clocking.ParkedCount;
+        HasOfflineWork = PendingSyncCount > 0 || ParkedCount > 0;
+        OfflineCaption = BuildOfflineCaption(PendingSyncCount, ParkedCount);
+    }
+
+    private static string BuildOfflineCaption(int pending, int parked)
+    {
+        if (parked > 0 && pending > 0)
+            return $"{PunchCountLabel(pending)} waiting to sync  ·  {parked} need attention";
+        if (parked > 0)
+            return parked == 1 ? "1 punch needs attention" : $"{parked} punches need attention";
+        if (pending > 0)
+            return $"{PunchCountLabel(pending)} saved here, waiting to sync";
+        return string.Empty;
+    }
+
+    private static string PunchCountLabel(int count) => count == 1 ? "1 punch" : $"{count} punches";
+
     private void MarkOnline()
     {
         Server = ServerLink.Online;
-        ServerCaption = "Server synced";
+        ServerCaption = PendingSyncCount > 0 ? "Syncing" : "Server synced";
         ConnectionCaption = $"Synced with the GroupNB clock server at {Now():h:mm tt}";
     }
 

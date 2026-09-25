@@ -4,6 +4,7 @@ using System.Text.Json;
 using Gnb.Clocking.Application.Clocking;
 using Gnb.Clocking.Domain.Clocking;
 using Gnb.Clocking.Infrastructure.ClockKiosk;
+using Gnb.Clocking.Infrastructure.ClockKiosk.Offline;
 using Gnb.Clocking.Infrastructure.Photos;
 using Xunit;
 
@@ -21,6 +22,7 @@ public sealed class ClockKioskHttpTests : IDisposable
 
     public void Dispose()
     {
+        _store?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         if (Directory.Exists(_root))
             Directory.Delete(_root, recursive: true);
     }
@@ -34,6 +36,16 @@ public sealed class ClockKioskHttpTests : IDisposable
 
     private ClockKioskApiClient Api(string? key = Key) => new(new HttpClient(_handler), Options(key));
 
+    private OfflineClockStore? _store;
+
+    private OfflineClockStore Store()
+    {
+        Directory.CreateDirectory(_root);
+        return _store ??= new OfflineClockStore(Path.Combine(_root, "clock-queue.db3"));
+    }
+
+    private ClockSyncWorker Sync(string? key = Key) => new(Api(key), Store());
+
     [Fact]
     public async Task Badge_lookup_resolves_the_candidate_and_remembers_the_open_shift()
     {
@@ -42,7 +54,7 @@ public sealed class ClockKioskHttpTests : IDisposable
              "tenant_id":6,"organization_id":16,"is_on_shift":true,"open_clock_in":"2026-09-22T08:00:00-04:00",
              "reference_date":"2026-09-22","assignment":"Inbound sort","client_name":"Sysco","site":"Brampton DC","punch_card_id":500}
             """);
-        var directory = new HttpCandidateBadgeDirectory(Api(), _shifts);
+        var directory = new HttpCandidateBadgeDirectory(Api(), _shifts, Store());
 
         var badge = await directory.FindByRfidAsync(";04a1c8e291?");
 
@@ -59,7 +71,7 @@ public sealed class ClockKioskHttpTests : IDisposable
     public async Task Unknown_or_out_of_scope_badge_is_null()
     {
         _handler.On("GET", "/api/clock-kiosk/badges/04DEAD0001", HttpStatusCode.NotFound, """{"error":"nope"}""");
-        var directory = new HttpCandidateBadgeDirectory(Api(), _shifts);
+        var directory = new HttpCandidateBadgeDirectory(Api(), _shifts, Store());
 
         Assert.Null(await directory.FindByRfidAsync("04DEAD0001"));
         Assert.Empty(directory.ListLinkedBadges());
@@ -78,7 +90,7 @@ public sealed class ClockKioskHttpTests : IDisposable
              "photo_relative_path":"Records/2026-09-22/ClockIN.jpeg"}],
              "open_shifts":[{"candidate_id":1042,"open_clock_in":"2026-09-22T08:00:00-04:00"}],"open_count":1}
             """);
-        var service = new HttpClockingService(Api(), _shifts, Options());
+        var service = new HttpClockingService(Api(), _shifts, Options(), Store(), Sync());
 
         var clockEvent = await service.ClockInAsync(Maya, Photo(isClockOut: false));
 
@@ -101,7 +113,7 @@ public sealed class ClockKioskHttpTests : IDisposable
             """);
         _handler.On("GET", "/api/clock-kiosk/sessions", HttpStatusCode.OK, """{"events":[],"open_shifts":[],"open_count":0}""");
         _shifts.SetShift(1042, DateTimeOffset.UtcNow);
-        var service = new HttpClockingService(Api(), _shifts, Options());
+        var service = new HttpClockingService(Api(), _shifts, Options(), Store(), Sync());
 
         var clockEvent = await service.ClockOutAsync(Maya, Photo(isClockOut: true));
 
@@ -111,11 +123,51 @@ public sealed class ClockKioskHttpTests : IDisposable
     }
 
     [Fact]
+    public async Task The_server_decides_whether_a_punch_was_in_or_out()
+    {
+        // The kiosk thinks this is a clock-out; the server says the shift was already closed and
+        // records a clock-in. The screen must report the clock-in, not the kiosk's guess.
+        _handler.On("POST", "/api/clock-kiosk/clock-out", HttpStatusCode.OK,
+            """
+            {"action":"clock_in","candidate_id":1042,"record_id":77,"utc_time":"2026-09-25T12:00:00Z",
+             "demand_name":"Inbound sort","image_path":"Records/2026-09-25/ClockIN.jpeg","is_extra":false}
+            """);
+        _handler.On("GET", "/api/clock-kiosk/sessions", HttpStatusCode.OK, """{"events":[],"open_shifts":[],"open_count":0}""");
+        _handler.On("GET", "/api/clock-kiosk/roster", HttpStatusCode.OK, """{"candidates":[],"server_time":"2026-09-25T12:00:00Z","count":0}""");
+        var service = new HttpClockingService(Api(), _shifts, Options(), Store(), Sync());
+
+        var clockEvent = await service.ClockOutAsync(Maya, Photo(isClockOut: true));
+
+        Assert.Equal(ClockAction.In, clockEvent.Action);
+        Assert.False(clockEvent.IsExtra);
+        Assert.Null(clockEvent.HoursWorked);
+    }
+
+    [Fact]
+    public async Task A_punch_the_server_filed_as_extra_time_says_so_and_leaves_the_shift_alone()
+    {
+        _shifts.SetShift(1042, DateTimeOffset.Now.AddHours(-3));
+        _handler.On("POST", "/api/clock-kiosk/clock-in", HttpStatusCode.OK,
+            """
+            {"action":"clock_in","candidate_id":1042,"record_id":77,"utc_time":"2026-09-25T12:00:00Z",
+             "demand_name":"Inbound sort","image_path":"Records/2026-09-25/ClockIN.jpeg","is_extra":true}
+            """);
+        _handler.On("GET", "/api/clock-kiosk/sessions", HttpStatusCode.OK, """{"events":[],"open_shifts":[],"open_count":0}""");
+        _handler.On("GET", "/api/clock-kiosk/roster", HttpStatusCode.OK, """{"candidates":[],"server_time":"2026-09-25T12:00:00Z","count":0}""");
+        var service = new HttpClockingService(Api(), _shifts, Options(), Store(), Sync());
+
+        var clockEvent = await service.ClockInAsync(Maya, Photo(isClockOut: false), resetCompletedDay: false);
+
+        Assert.True(clockEvent.IsExtra);
+        Assert.Equal(ClockAction.In, clockEvent.Action);
+    }
+
+    [Fact]
     public async Task Server_400_message_surfaces_as_ClockingException()
     {
         _handler.On("POST", "/api/clock-kiosk/clock-in", HttpStatusCode.BadRequest,
             """{"error":"You are already clocked in. Clock out before starting another shift."}""");
-        var service = new HttpClockingService(Api(), _shifts, Options());
+        var service = new HttpClockingService(Api(), _shifts, Options(), Store(), Sync());
 
         var error = await Assert.ThrowsAsync<ClockingException>(() => service.ClockInAsync(Maya, Photo(isClockOut: false)));
 
@@ -125,7 +177,7 @@ public sealed class ClockKioskHttpTests : IDisposable
     [Fact]
     public async Task Punch_without_a_photo_never_reaches_the_server()
     {
-        var service = new HttpClockingService(Api(), _shifts, Options());
+        var service = new HttpClockingService(Api(), _shifts, Options(), Store(), Sync());
 
         var error = await Assert.ThrowsAsync<ClockingException>(() => service.ClockInAsync(Maya, new ClockPhoto("", "")));
 
@@ -136,9 +188,9 @@ public sealed class ClockKioskHttpTests : IDisposable
     [Fact]
     public async Task Missing_kiosk_key_is_a_configuration_error()
     {
-        var service = new HttpClockingService(Api(key: null), _shifts, Options(key: null));
+        var service = new HttpClockingService(Api(key: null), _shifts, Options(key: null), Store(), Sync(key: null));
 
-        var error = await Assert.ThrowsAsync<ClockingException>(() => service.RefreshAsync());
+        var error = await Assert.ThrowsAsync<ClockOfflineException>(() => service.RefreshAsync());
 
         Assert.Contains("ClockKiosk:ApiKey", error.Message);
         Assert.Empty(_handler.Requests);

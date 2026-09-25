@@ -4,6 +4,10 @@ namespace Gnb.Clocking.App;
 
 public static class BadgeEntrySetup
 {
+    public static void ClaimSoon()
+    {
+    }
+
     public static void Configure()
     {
         EntryHandler.Mapper.AppendToMapping("GroupNbBadge", (handler, view) =>

@@ -31,8 +31,19 @@ public sealed class HttpClockPhotoStore : IClockPhotoStore
     {
         var local = await _local.SaveJpegAsync(candidate, isClockOut, referenceDate, jpeg, cancellationToken)
             .ConfigureAwait(false);
-        var uploaded = await _api.UploadPhotoAsync(candidate.Rfid, isClockOut, local.AbsolutePath, cancellationToken)
-            .ConfigureAwait(false);
+
+        PhotoUploadResponse uploaded;
+        try
+        {
+            uploaded = await _api
+                .UploadPhotoAsync(candidate.Rfid, isClockOut, local.AbsolutePath, DateTimeOffset.Now, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ClockOfflineException)
+        {
+            // The JPEG is on disk. The queued punch uploads it when the link is back.
+            return local;
+        }
 
         var serverPath = uploaded.RelativePath?.Replace('\\', '/').TrimStart('/');
         if (string.IsNullOrWhiteSpace(serverPath)
