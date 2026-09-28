@@ -13,7 +13,7 @@
         <!-- Ambient backdrop: static dot grid, GPU-moved glows, scan flashes. -->
         <controls:AuroraBackdrop x:Name="Aurora" />
 
-        <Grid RowDefinitions="Auto,*,Auto" Padding="28,20,28,14" RowSpacing="18">
+        <Grid x:Name="PageGrid" RowDefinitions="Auto,*,Auto" Padding="28,20,28,14" RowSpacing="18">
 
             <!-- ============ Header ============ -->
             <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="24">
@@ -121,7 +121,7 @@
                 <!-- Scanner stage -->
                 <Border Grid.Column="0" BackgroundColor="{DynamicResource Stage}"
                         Stroke="{DynamicResource Line}" StrokeThickness="1" StrokeShape="RoundRectangle 28">
-                    <Grid RowDefinitions="Auto,*,Auto" Padding="24,20,24,22">
+                    <Grid x:Name="StageGrid" RowDefinitions="Auto,Auto,*,Auto" Padding="24,16,24,16" RowSpacing="12">
 
                         <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="12">
                             <HorizontalStackLayout Spacing="12" VerticalOptions="Center">
@@ -165,11 +165,20 @@
                                    Completed="OnRfidCompleted" />
                         </Grid>
 
+                        <!-- Stepper sits above the camera, centered, with room so the rings do not touch it. -->
+                        <Grid x:Name="StepperRow" Grid.Row="1" Padding="0,4,0,16"
+                              HorizontalOptions="Fill" VerticalOptions="Center">
+                            <HorizontalStackLayout x:Name="Stepper"
+                                                   HorizontalOptions="Center"
+                                                   VerticalOptions="Center"
+                                                   Spacing="0" />
+                        </Grid>
+
                         <!-- Camera, halo and floating HUD. Sized in code from the available space. -->
-                        <Grid x:Name="ScannerArea" Grid.Row="1" SizeChanged="OnScannerSizeChanged">
+                        <Grid x:Name="ScannerArea" Grid.Row="2" SizeChanged="OnScannerSizeChanged">
                             <controls:ScannerHalo x:Name="Halo" HorizontalOptions="Center" VerticalOptions="Center" />
 
-                            <Border x:Name="CameraFrame" WidthRequest="300" HeightRequest="300" Padding="0"
+                            <Border x:Name="CameraFrame" WidthRequest="360" HeightRequest="360" Padding="0"
                                     StrokeThickness="3" BackgroundColor="#000000"
                                     HorizontalOptions="Center" VerticalOptions="Center"
                                     StrokeShape="RoundRectangle 150">
@@ -258,19 +267,21 @@
                             </Border>
                         </Grid>
 
-                        <!-- Prompt / result copy and the progress stepper. Fixed height so the camera never jumps. -->
-                        <Grid Grid.Row="2" RowDefinitions="*,Auto" HeightRequest="340" RowSpacing="8">
-                            <VerticalStackLayout x:Name="PromptStack" Spacing="2" VerticalOptions="Center">
-                                <Label Text="{Binding Prompt}" FontFamily="OpenSansSemibold" FontSize="28"
+                        <!-- Prompt / result copy. Height tightens at 1366×768 so the camera still fits. -->
+                        <Grid x:Name="PromptBand" Grid.Row="3" HeightRequest="168">
+                            <VerticalStackLayout x:Name="PromptStack" Spacing="2"
+                                                 HorizontalOptions="Center" VerticalOptions="Center">
+                                <Label x:Name="PromptTitle" Text="{Binding Prompt}" FontFamily="OpenSansSemibold" FontSize="28"
                                        HorizontalTextAlignment="Center" />
-                                <Label Text="{Binding PromptDetail}" FontSize="18" TextColor="{DynamicResource Ink}"
+                                <Label x:Name="PromptDetail" Text="{Binding PromptDetail}" FontSize="18" TextColor="{DynamicResource Ink}"
                                        HorizontalTextAlignment="Center" />
                             </VerticalStackLayout>
 
-                            <VerticalStackLayout x:Name="SuccessPanel" IsVisible="False" Spacing="0" VerticalOptions="Center">
+                            <VerticalStackLayout x:Name="SuccessPanel" IsVisible="False" Spacing="0"
+                                                 HorizontalOptions="Center" VerticalOptions="Center">
                                 <Label Text="{Binding SuccessTitle}" FontFamily="OpenSansSemibold" FontSize="16" CharacterSpacing="2"
                                        TextColor="{StaticResource Success}" HorizontalTextAlignment="Center" />
-                                <Label Text="{Binding SuccessTime}" FontFamily="OpenSansSemibold" FontSize="58"
+                                <Label x:Name="SuccessTimeLabel" Text="{Binding SuccessTime}" FontFamily="OpenSansSemibold" FontSize="58"
                                        HorizontalTextAlignment="Center" Margin="0,-6,0,-4" />
                                 <Label Text="{Binding SuccessDetail}" FontSize="16" TextColor="{DynamicResource Muted}"
                                        HorizontalTextAlignment="Center" />
@@ -285,16 +296,14 @@
                                     <BoxView x:Name="CountdownFill" Color="{StaticResource Success}" CornerRadius="2" AnchorX="0" />
                                 </Grid>
                             </VerticalStackLayout>
-
-                            <HorizontalStackLayout x:Name="Stepper" Grid.Row="1" HorizontalOptions="Center" Spacing="0" />
                         </Grid>
                     </Grid>
                 </Border>
 
                 <!-- Live activity -->
-                <Border Grid.Column="1" BackgroundColor="{DynamicResource Stage}" Stroke="{DynamicResource Line}"
+                <Border x:Name="ActivityCard" Grid.Column="1" BackgroundColor="{DynamicResource Stage}" Stroke="{DynamicResource Line}"
                         StrokeThickness="1" Padding="22,22,22,8" StrokeShape="RoundRectangle 28">
-                    <Grid RowDefinitions="Auto,Auto,*" RowSpacing="18">
+                    <Grid x:Name="ActivityGrid" RowDefinitions="Auto,Auto,*" RowSpacing="18">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                             <VerticalStackLayout Spacing="0" VerticalOptions="Center">
                                 <Label Text="Live activity" FontFamily="OpenSansSemibold" FontSize="24" />

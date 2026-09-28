@@ -33,6 +33,8 @@ public partial class KioskPage : ContentPage
     private int _motion;
     private bool _ambientStarted;
     private bool _clearing;
+    private bool _compactLayout;
+    private bool _densityApplied;
     private DateTime _burstStart;
     private DateTime _lastKey;
 
@@ -541,6 +543,63 @@ public partial class KioskPage : ContentPage
             view.TranslateTo(0, 0, 420, Easing.SpringOut));
     }
 
+    protected override void OnSizeAllocated(double width, double height)
+    {
+        base.OnSizeAllocated(width, height);
+        if (width <= 0 || height <= 0)
+            return;
+
+        // 1366×768 (and the 720 minimum) is short once the header, stepper, and prompt are on screen.
+        ApplyDensity(height <= 800);
+    }
+
+    /// <summary>
+    /// Short windows keep the stepper above the camera and still leave a circle that fits.
+    /// Taller windows keep the roomier type and spacing.
+    /// </summary>
+    private void ApplyDensity(bool compact)
+    {
+        if (_densityApplied && compact == _compactLayout)
+            return;
+
+        _densityApplied = true;
+        _compactLayout = compact;
+
+        if (compact)
+        {
+            PageGrid.Padding = new Thickness(16, 10, 16, 8);
+            PageGrid.RowSpacing = 8;
+            StageGrid.Padding = new Thickness(16, 10, 16, 10);
+            StageGrid.RowSpacing = 6;
+            StepperRow.Padding = new Thickness(0, 2, 0, 12);
+            PromptBand.HeightRequest = 120;
+            PromptTitle.FontSize = 22;
+            PromptDetail.FontSize = 15;
+            SuccessTimeLabel.FontSize = 40;
+            HoursLabel.FontSize = 34;
+            MinutesLabel.FontSize = 34;
+            Colon.FontSize = 30;
+            ActivityCard.Padding = new Thickness(16, 14, 16, 6);
+            ActivityGrid.RowSpacing = 10;
+            return;
+        }
+
+        PageGrid.Padding = new Thickness(28, 20, 28, 14);
+        PageGrid.RowSpacing = 18;
+        StageGrid.Padding = new Thickness(24, 16, 24, 16);
+        StageGrid.RowSpacing = 12;
+        StepperRow.Padding = new Thickness(0, 4, 0, 16);
+        PromptBand.HeightRequest = 148;
+        PromptTitle.FontSize = 28;
+        PromptDetail.FontSize = 18;
+        SuccessTimeLabel.FontSize = 58;
+        HoursLabel.FontSize = 44;
+        MinutesLabel.FontSize = 44;
+        Colon.FontSize = 40;
+        ActivityCard.Padding = new Thickness(22, 22, 22, 8);
+        ActivityGrid.RowSpacing = 18;
+    }
+
     // ------------------------------------------------------------------ Scanner sizing and scan line
 
     private void OnScannerSizeChanged(object? sender, EventArgs e)
@@ -550,7 +609,13 @@ public partial class KioskPage : ContentPage
         if (width <= 0 || height <= 0)
             return;
 
-        var diameter = Math.Clamp(Math.Min(height * 0.7, width * 0.46), 200, 460);
+        // The glow tile is 1.95× the face. Fit that whole tile in the well so the ring is
+        // complete at the top and bottom, and does not run under the stepper.
+        const double haloScale = 1.95;
+        const double margin = 12;
+        var box = Math.Max(0, Math.Min(width, height) - margin * 2);
+        var cap = _compactLayout ? 420 : 560;
+        var diameter = Math.Min(box / haloScale, cap);
         CameraFrame.WidthRequest = diameter;
         CameraFrame.HeightRequest = diameter;
         CameraFrame.StrokeShape = new RoundRectangle { CornerRadius = diameter / 2 };
@@ -632,7 +697,14 @@ public partial class KioskPage : ContentPage
                 Padding = new Thickness(12, 7),
                 StrokeThickness = 1,
                 StrokeShape = new RoundRectangle { CornerRadius = 15 },
-                Content = new HorizontalStackLayout { Spacing = 8, Children = { dot, label } },
+                VerticalOptions = LayoutOptions.Center,
+                Content = new HorizontalStackLayout
+                {
+                    Spacing = 8,
+                    HorizontalOptions = LayoutOptions.Center,
+                    VerticalOptions = LayoutOptions.Center,
+                    Children = { dot, label },
+                },
             };
             _steps.Add((pill, dot, label));
             Stepper.Children.Add(pill);
