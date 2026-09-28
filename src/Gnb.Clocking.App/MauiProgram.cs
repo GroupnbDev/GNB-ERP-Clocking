@@ -38,7 +38,11 @@ public static class MauiProgram
 			.ConfigureLifecycleEvents(events =>
 			{
 #if WINDOWS
-				events.AddWindows(windows => windows.OnWindowCreated(FullScreenToggle.Attach));
+				events.AddWindows(windows => windows.OnWindowCreated(window =>
+				{
+					FullScreenToggle.Attach(window);
+					BadgeEntrySetup.AttachWindow(window);
+				}));
 #endif
 			});
 

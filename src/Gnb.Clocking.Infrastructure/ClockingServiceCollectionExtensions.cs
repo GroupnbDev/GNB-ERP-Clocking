@@ -23,12 +23,26 @@ public static class ClockingServiceCollectionExtensions
         // One SQLite file next to the photos: queued punches, cached roster, measured clock skew.
         services.AddSingleton(new OfflineClockStore(Path.Combine(options.PhotoRoot, "clock-queue.db3")));
         services.AddSingleton<ClockSyncWorker>();
-        services.AddSingleton(provider => new ClockKioskApiClient(new HttpClient(), provider.GetRequiredService<ClockKioskApiOptions>()));
+        services.AddSingleton(provider => new ClockKioskApiClient(CreateHttp(), provider.GetRequiredService<ClockKioskApiOptions>()));
         services.AddSingleton(new FileClockPhotoStore(options.PhotoRoot));
         services.AddSingleton<ICandidateBadgeDirectory, HttpCandidateBadgeDirectory>();
         services.AddSingleton<IClockPhotoStore, HttpClockPhotoStore>();
         services.AddSingleton<IClockingService, HttpClockingService>();
 
         return services;
+    }
+
+    /// <summary>
+    /// A process that stays up for days must drop pooled sockets. The default handler keeps them
+    /// forever, and a dead connection then sits on the next tap until the request times out.
+    /// </summary>
+    private static HttpClient CreateHttp()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
+        };
+        return new HttpClient(handler, disposeHandler: true);
     }
 }

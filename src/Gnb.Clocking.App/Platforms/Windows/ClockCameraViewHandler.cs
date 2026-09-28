@@ -1,6 +1,7 @@
 using Gnb.Clocking.App.Camera;
 using Gnb.Clocking.Application.Clocking;
 using Microsoft.Maui.Handlers;
+using Microsoft.UI.Dispatching;
 using Windows.Media.Capture;
 using Windows.Media.Capture.Frames;
 using Windows.Media.Core;
@@ -33,6 +34,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinPrev
     private MediaPlayer? _mediaPlayer;
     private VideoEncodingProperties? _previewFormat;
     private string? _error;
+    private int _recycling;
 
     public WinClockCameraHandler() : base(PropertyMapper)
     {
@@ -52,6 +54,56 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinPrev
 
     protected override void DisconnectHandler(WinPreviewElement platformView)
     {
+        ReleasePreview();
+        base.DisconnectHandler(platformView);
+    }
+
+    /// <summary>
+    /// A preview left running for days stops delivering frames, and the photo grab then never returns.
+    /// Drop the pipeline and open it again so the next tap is not stuck on the scan line.
+    /// </summary>
+    private void RecycleSoon()
+    {
+        DispatcherQueue? queue = PlatformView?.DispatcherQueue;
+        if (queue == null)
+        {
+            _ = RecycleAsync();
+            return;
+        }
+
+        queue.TryEnqueue(() => _ = RecycleAsync());
+    }
+
+    private async Task RecycleAsync()
+    {
+        if (Interlocked.Exchange(ref _recycling, 1) == 1)
+            return;
+
+        try
+        {
+            WinPreviewElement? view = PlatformView;
+            ReleasePreview();
+            if (view == null)
+                return;
+
+            // The in-flight photo grab still holds the camera. Opening it again immediately fails,
+            // and the preview then stays dead until the exe is restarted.
+            await Task.Delay(500).ConfigureAwait(true);
+            await StartAsync(view).ConfigureAwait(true);
+            if (_media == null)
+            {
+                await Task.Delay(1000).ConfigureAwait(true);
+                await StartAsync(view).ConfigureAwait(true);
+            }
+        }
+        finally
+        {
+            _recycling = 0;
+        }
+    }
+
+    private void ReleasePreview()
+    {
         if (_mediaPlayer != null)
         {
             _mediaPlayer.Pause();
@@ -61,8 +113,6 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinPrev
 
         _media?.Dispose();
         _media = null;
-
-        base.DisconnectHandler(platformView);
     }
 
     public async Task<byte[]?> CaptureJpegAsync(CancellationToken cancellationToken)
@@ -80,7 +130,15 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinPrev
         }
 
         using var stream = new InMemoryRandomAccessStream();
-        await _media.CapturePhotoToStreamAsync(encoding, stream).AsTask(cancellationToken).ConfigureAwait(true);
+        using var abandoned = cancellationToken.Register(RecycleSoon);
+        try
+        {
+            await _media.CapturePhotoToStreamAsync(encoding, stream).AsTask(cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
         stream.Seek(0);
         var size = (uint)stream.Size;
         using var reader = new DataReader(stream.GetInputStreamAt(0));

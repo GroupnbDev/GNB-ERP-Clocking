@@ -220,7 +220,8 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         try
         {
             await Task.Delay(460);
-            var badge = await _directory.FindByRfidAsync(rfid);
+            using var lookup = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var badge = await _directory.FindByRfidAsync(rfid, lookup.Token);
             if (badge == null)
             {
                 UnknownMessage = $"No GroupNB candidate is linked to {rfid}.";
@@ -266,6 +267,11 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             UnknownMessage = ex.Message;
             Phase = KioskPhase.Unknown;
         }
+        catch (OperationCanceledException)
+        {
+            UnknownMessage = "This tap did not finish. Hold the badge to the reader again.";
+            Phase = KioskPhase.Unknown;
+        }
         finally
         {
             _busy = false;
@@ -307,7 +313,23 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     {
         Phase = KioskPhase.Capturing;
         await Task.Delay(700);
-        var jpeg = await _camera.CaptureJpegAsync();
+        using var capture = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        Task<byte[]?> shot = _camera.CaptureJpegAsync(capture.Token);
+        Task finished = await Task.WhenAny(shot, Task.Delay(TimeSpan.FromSeconds(9)));
+        if (finished != shot)
+        {
+            capture.Cancel();
+            _ = shot.ContinueWith(
+                task => _ = task.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+            UnknownMessage = "The camera did not respond. Hold the badge to the reader again.";
+            Phase = KioskPhase.Unknown;
+            return;
+        }
+
+        var jpeg = await shot;
         if (jpeg == null || jpeg.Length == 0)
         {
             UnknownMessage = "A photo is required to clock in or out.";
