@@ -22,8 +22,8 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     private readonly IClockCamera _camera;
     private readonly IClockPhotoStore _photos;
     private CandidateBadge? _badge;
-    private const int ClockInCooldownMinutes = 30;
-    private const int ClockOutCooldownMinutes = 15;
+    private const int ClockInCooldownMinutes = ClockCooldownPolicy.AfterClockInMinutes;
+    private const int ClockOutCooldownMinutes = ClockCooldownPolicy.AfterClockOutMinutes;
     private readonly Dictionary<int, DateTimeOffset> _lastClockOut = new();
 
     /// <summary>Seconds the cooldown card stays up. Long enough to read the time it names.</summary>
@@ -231,27 +231,22 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             }
 
             Show(badge);
-            var openAt = _clocking.GetOpenClockIn(badge.CandidateId);
-            if (IsOnShift && openAt is DateTimeOffset started && Now() - started < TimeSpan.FromMinutes(ClockInCooldownMinutes))
+            var openAt = IsOnShift ? _clocking.GetOpenClockIn(badge.CandidateId) : null;
+            switch (ClockCooldownPolicy.Evaluate(Now(), openAt, LatestClockOut(badge)))
             {
-                var ready = started.ToLocalTime().AddMinutes(ClockInCooldownMinutes);
-                ShowHold(
-                    "You're already clocked in",
-                    $"Clocked in at {started.ToLocalTime():h:mm tt}",
-                    $"You can clock out after {ready:h:mm tt}");
-                return;
-            }
+                case { Kind: ClockCooldownKind.AfterClockIn } holdIn:
+                    ShowHold(
+                        "You're already clocked in",
+                        $"Clocked in at {holdIn.PunchedAt.ToLocalTime():h:mm tt}",
+                        $"You can clock out after {holdIn.ReadyAt.ToLocalTime():h:mm tt}");
+                    return;
 
-            if (LatestClockOut(badge) is DateTimeOffset ended
-                && Now() - ended < TimeSpan.FromMinutes(ClockOutCooldownMinutes)
-                && (openAt is null || openAt.Value <= ended))
-            {
-                var ready = ended.ToLocalTime().AddMinutes(ClockOutCooldownMinutes);
-                ShowHold(
-                    "You're already clocked out",
-                    $"Clocked out at {ended.ToLocalTime():h:mm tt}",
-                    $"You can tap again after {ready:h:mm tt}");
-                return;
+                case { Kind: ClockCooldownKind.AfterClockOut } holdOut:
+                    ShowHold(
+                        "You're already clocked out",
+                        $"Clocked out at {holdOut.PunchedAt.ToLocalTime():h:mm tt}",
+                        $"You can tap again after {holdOut.ReadyAt.ToLocalTime():h:mm tt}");
+                    return;
             }
 
             if (!IsOnShift && badge.ShiftFinished)
@@ -280,20 +275,21 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Clock-out that still blocks another tap. A punchcard edit that clears the finished shift wins,
-    /// so the next tap is sent. Right after a punch, the device time covers a badge that has not caught up.
+    /// The clock-out that can still hold another tap: the server's, or one taken on this device that the
+    /// server has not confirmed. A punch taken here counts even when the badge lookup says the day is not
+    /// finished — offline the roster always says that, and dropping it skipped the hold entirely.
     /// </summary>
     private DateTimeOffset? LatestClockOut(CandidateBadge badge)
     {
-        if (!IsOnShift && !badge.ShiftFinished)
-        {
-            _lastClockOut.Remove(badge.CandidateId);
-            return null;
-        }
-
         DateTimeOffset? latest = badge.ShiftFinished ? badge.FinishedClockOut : null;
-        if (_lastClockOut.TryGetValue(badge.CandidateId, out DateTimeOffset local) && (latest is null || local > latest))
-            latest = local;
+
+        if (_lastClockOut.TryGetValue(badge.CandidateId, out DateTimeOffset local))
+        {
+            if (ClockCooldownPolicy.HasExpired(Now(), local))
+                _lastClockOut.Remove(badge.CandidateId);
+            else if (latest is null || local > latest)
+                latest = local;
+        }
 
         return latest;
     }
