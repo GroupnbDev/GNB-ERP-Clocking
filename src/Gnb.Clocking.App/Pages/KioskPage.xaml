@@ -116,7 +116,7 @@
             </Grid>
 
             <!-- ============ Body ============ -->
-            <Grid Grid.Row="1" ColumnDefinitions="1.75*,1*" ColumnSpacing="20">
+            <Grid x:Name="BodyGrid" Grid.Row="1" ColumnDefinitions="1.75*,1*" ColumnSpacing="20">
 
                 <!-- Scanner stage -->
                 <Border Grid.Column="0" BackgroundColor="{DynamicResource Stage}"
@@ -306,8 +306,9 @@
                     <Grid x:Name="ActivityGrid" RowDefinitions="Auto,Auto,*" RowSpacing="18">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                             <VerticalStackLayout Spacing="0" VerticalOptions="Center">
-                                <Label Text="Live activity" FontFamily="OpenSansSemibold" FontSize="24" />
-                                <Label Text="{Binding SessionCaption}" FontSize="14" TextColor="{DynamicResource Muted}" />
+                                <Label Text="Live activity" FontFamily="OpenSansSemibold" FontSize="{DynamicResource ActivityTitleSize}" />
+                                <Label Text="{Binding SessionCaption}" FontSize="{DynamicResource ActivityCaptionSize}"
+                                       TextColor="{DynamicResource Muted}" LineBreakMode="TailTruncation" />
                             </VerticalStackLayout>
                             <Border Grid.Column="1" Padding="12,6" VerticalOptions="Center" StrokeThickness="1"
                                     StrokeShape="RoundRectangle 14" BackgroundColor="{DynamicResource Glass}"
@@ -327,7 +328,7 @@
                         </Grid>
 
                         <Grid Grid.Row="1" ColumnDefinitions="*,*,*" ColumnSpacing="10">
-                            <Border x:Name="OnShiftTile" Padding="14,12" StrokeThickness="0" StrokeShape="RoundRectangle 20">
+                            <Border x:Name="OnShiftTile" Padding="{DynamicResource ActivityTilePadding}" StrokeThickness="0" StrokeShape="RoundRectangle 20">
                                 <Border.Background>
                                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                                         <GradientStop Color="{StaticResource Brand}" Offset="0" />
@@ -338,22 +339,25 @@
                                     <Shadow Brush="#AB1100" Opacity="0.35" Radius="18" Offset="0,6" />
                                 </Border.Shadow>
                                 <VerticalStackLayout Spacing="0">
-                                    <Label x:Name="OnShiftValue" Text="0" FontFamily="OpenSansSemibold" FontSize="30" TextColor="#FFFFFF" />
-                                    <Label Text="On shift" FontSize="13" TextColor="#E6FFFFFF" />
+                                    <Label x:Name="OnShiftValue" Text="0" FontFamily="OpenSansSemibold" FontSize="{DynamicResource ActivityValueSize}" TextColor="#FFFFFF" />
+                                    <Label x:Name="OnShiftLabel" Text="On shift" FontSize="{DynamicResource ActivityTileLabelSize}"
+                                           TextColor="#E6FFFFFF" LineBreakMode="NoWrap" />
                                 </VerticalStackLayout>
                             </Border>
-                            <Border x:Name="InTile" Grid.Column="1" Padding="14,12" StrokeThickness="1" StrokeShape="RoundRectangle 20"
+                            <Border x:Name="InTile" Grid.Column="1" Padding="{DynamicResource ActivityTilePadding}" StrokeThickness="1" StrokeShape="RoundRectangle 20"
                                     BackgroundColor="{DynamicResource Glass}" Stroke="{DynamicResource Line}">
                                 <VerticalStackLayout Spacing="0">
-                                    <Label x:Name="InValue" Text="0" FontFamily="OpenSansSemibold" FontSize="30" />
-                                    <Label Text="In today" FontSize="13" TextColor="{DynamicResource Muted}" />
+                                    <Label x:Name="InValue" Text="0" FontFamily="OpenSansSemibold" FontSize="{DynamicResource ActivityValueSize}" />
+                                    <Label x:Name="InLabel" Text="In today" FontSize="{DynamicResource ActivityTileLabelSize}"
+                                           TextColor="{DynamicResource Muted}" LineBreakMode="NoWrap" />
                                 </VerticalStackLayout>
                             </Border>
-                            <Border x:Name="OutTile" Grid.Column="2" Padding="14,12" StrokeThickness="1" StrokeShape="RoundRectangle 20"
+                            <Border x:Name="OutTile" Grid.Column="2" Padding="{DynamicResource ActivityTilePadding}" StrokeThickness="1" StrokeShape="RoundRectangle 20"
                                     BackgroundColor="{DynamicResource Glass}" Stroke="{DynamicResource Line}">
                                 <VerticalStackLayout Spacing="0">
-                                    <Label x:Name="OutValue" Text="0" FontFamily="OpenSansSemibold" FontSize="30" />
-                                    <Label Text="Out today" FontSize="13" TextColor="{DynamicResource Muted}" />
+                                    <Label x:Name="OutValue" Text="0" FontFamily="OpenSansSemibold" FontSize="{DynamicResource ActivityValueSize}" />
+                                    <Label x:Name="OutLabel" Text="Out today" FontSize="{DynamicResource ActivityTileLabelSize}"
+                                           TextColor="{DynamicResource Muted}" LineBreakMode="NoWrap" />
                                 </VerticalStackLayout>
                             </Border>
                         </Grid>
@@ -398,10 +402,11 @@
                                         <Border WidthRequest="12" HeightRequest="12" StrokeThickness="2"
                                                 StrokeShape="RoundRectangle 6" BackgroundColor="{Binding Accent}"
                                                 Stroke="{DynamicResource Canvas}" VerticalOptions="Center" HorizontalOptions="Center" />
-                                        <Border Grid.Column="1" Padding="12" StrokeThickness="1" StrokeShape="RoundRectangle 18"
+                                        <Border Grid.Column="1" Padding="{DynamicResource RowPadding}" StrokeThickness="1" StrokeShape="RoundRectangle 18"
                                                 BackgroundColor="{DynamicResource Glass}" Stroke="{DynamicResource Line}">
                                             <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-                                                <Border WidthRequest="46" HeightRequest="46" StrokeThickness="0"
+                                                <Border WidthRequest="{DynamicResource RowAvatarSize}"
+                                                        HeightRequest="{DynamicResource RowAvatarSize}" StrokeThickness="0"
                                                         StrokeShape="RoundRectangle 14" BackgroundColor="{Binding Accent}"
                                                         VerticalOptions="Center">
                                                     <Grid>
@@ -409,14 +414,16 @@
                                                                TextColor="#FFFFFF"
                                                                HorizontalTextAlignment="Center" VerticalTextAlignment="Center"
                                                                IsVisible="{Binding ShowInitials}" />
-                                                        <Image Source="{Binding PhotoPath}" Aspect="AspectFill" WidthRequest="46"
-                                                               HeightRequest="46" IsVisible="{Binding HasPhoto}" />
+                                                        <Image Source="{Binding PhotoPath}" Aspect="AspectFill"
+                                                               WidthRequest="{DynamicResource RowAvatarSize}"
+                                                               HeightRequest="{DynamicResource RowAvatarSize}"
+                                                               IsVisible="{Binding HasPhoto}" />
                                                     </Grid>
                                                 </Border>
                                                 <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
-                                                    <Label Text="{Binding Name}" FontFamily="OpenSansSemibold" FontSize="16"
+                                                    <Label Text="{Binding Name}" FontFamily="OpenSansSemibold" FontSize="{DynamicResource RowNameSize}"
                                                            LineBreakMode="TailTruncation" />
-                                                    <Label Text="{Binding Detail}" FontSize="13" TextColor="{DynamicResource Faint}"
+                                                    <Label Text="{Binding Detail}" FontSize="{DynamicResource RowDetailSize}" TextColor="{DynamicResource Faint}"
                                                            LineBreakMode="TailTruncation" />
                                                     <!-- Captured here during an outage: the shift is real, the server just has not seen it. -->
                                                     <HorizontalStackLayout Spacing="6" IsVisible="{Binding ShowSyncNote}">
@@ -428,11 +435,11 @@
                                                     </HorizontalStackLayout>
                                                 </VerticalStackLayout>
                                                 <VerticalStackLayout Grid.Column="2" VerticalOptions="Center" Spacing="4">
-                                                    <Label Text="{Binding Time}" FontFamily="OpenSansSemibold" FontSize="15"
+                                                    <Label Text="{Binding Time}" FontFamily="OpenSansSemibold" FontSize="{DynamicResource RowTimeSize}"
                                                            HorizontalTextAlignment="End" />
                                                     <Border Padding="8,3" StrokeThickness="0" StrokeShape="RoundRectangle 9"
                                                             BackgroundColor="{Binding Accent}" HorizontalOptions="End">
-                                                        <Label Text="{Binding Action}" FontFamily="OpenSansSemibold" FontSize="12"
+                                                        <Label Text="{Binding Action}" FontFamily="OpenSansSemibold" FontSize="{DynamicResource RowBadgeSize}"
                                                                TextColor="#FFFFFF" />
                                                     </Border>
                                                 </VerticalStackLayout>

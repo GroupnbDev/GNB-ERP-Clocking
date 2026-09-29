@@ -9,6 +9,21 @@
                 <ResourceDictionary Source="Resources/Styles/Colors.xaml" />
                 <ResourceDictionary Source="Resources/Styles/Styles.xaml" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Live activity sizing. KioskPage rewrites these per window height, so the rail tightens
+                 on a short laptop panel instead of truncating every name. -->
+            <x:Double x:Key="ActivityTitleSize">24</x:Double>
+            <x:Double x:Key="ActivityCaptionSize">14</x:Double>
+            <x:Double x:Key="ActivityValueSize">30</x:Double>
+            <x:Double x:Key="ActivityTileLabelSize">13</x:Double>
+            <x:Double x:Key="RowAvatarSize">46</x:Double>
+            <x:Double x:Key="RowAvatarRadius">14</x:Double>
+            <x:Double x:Key="RowNameSize">16</x:Double>
+            <x:Double x:Key="RowDetailSize">13</x:Double>
+            <x:Double x:Key="RowTimeSize">15</x:Double>
+            <x:Double x:Key="RowBadgeSize">12</x:Double>
+            <Thickness x:Key="RowPadding">12</Thickness>
+            <Thickness x:Key="ActivityTilePadding">14,12</Thickness>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

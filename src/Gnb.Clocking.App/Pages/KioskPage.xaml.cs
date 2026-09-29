@@ -35,6 +35,7 @@ public partial class KioskPage : ContentPage
     private bool _clearing;
     private bool _compactLayout;
     private bool _densityApplied;
+    private StageDensity _density = StageDensity.Roomy;
     private DateTime _burstStart;
     private DateTime _lastKey;
 
@@ -549,23 +550,51 @@ public partial class KioskPage : ContentPage
         if (width <= 0 || height <= 0)
             return;
 
-        // 1366×768 (and the 720 minimum) is short once the header, stepper, and prompt are on screen.
-        ApplyDensity(height <= 800);
+        // 1366×768 and 1600×769 panels are short once the header, stepper and prompt are on screen;
+        // below ~700 the roomy sizes do not fit at all, so there is a third, tighter step.
+        ApplyDensity(height <= 800 ? (height <= 700 ? StageDensity.Tight : StageDensity.Compact) : StageDensity.Roomy);
     }
 
     /// <summary>
     /// Short windows keep the stepper above the camera and still leave a circle that fits.
     /// Taller windows keep the roomier type and spacing.
     /// </summary>
-    private void ApplyDensity(bool compact)
+    private void ApplyDensity(StageDensity density)
     {
-        if (_densityApplied && compact == _compactLayout)
+        if (_densityApplied && density == _density)
             return;
 
         _densityApplied = true;
-        _compactLayout = compact;
+        _density = density;
+        _compactLayout = density != StageDensity.Roomy;
 
-        if (compact)
+        if (density == StageDensity.Tight)
+        {
+            // ~700px and under: every fixed height has to give, or the prompt falls off the screen.
+            PageGrid.Padding = new Thickness(12, 6, 12, 6);
+            PageGrid.RowSpacing = 6;
+            StageGrid.Padding = new Thickness(12, 8, 12, 8);
+            StageGrid.RowSpacing = 4;
+            StepperRow.Padding = new Thickness(0, 0, 0, 6);
+            PromptBand.HeightRequest = 92;
+            PromptTitle.FontSize = 19;
+            PromptDetail.FontSize = 13;
+            SuccessTimeLabel.FontSize = 32;
+            HoursLabel.FontSize = 28;
+            MinutesLabel.FontSize = 28;
+            Colon.FontSize = 24;
+            ActivityCard.Padding = new Thickness(12, 10, 12, 4);
+            ActivityGrid.RowSpacing = 8;
+            ApplyActivityScale(
+                title: 18, caption: 11, value: 20, tileLabel: 10,
+                avatar: 32, name: 13, detail: 11, time: 12, badge: 10,
+                rowPadding: new Thickness(8, 7), tilePadding: new Thickness(10, 8), shortTileLabels: true);
+            // A narrow rail is what truncates names, so give it a bigger share when space is short.
+            SetBodyColumns(1.4, 10);
+            return;
+        }
+
+        if (density == StageDensity.Compact)
         {
             PageGrid.Padding = new Thickness(16, 10, 16, 8);
             PageGrid.RowSpacing = 8;
@@ -581,6 +610,11 @@ public partial class KioskPage : ContentPage
             Colon.FontSize = 30;
             ActivityCard.Padding = new Thickness(16, 14, 16, 6);
             ActivityGrid.RowSpacing = 10;
+            ApplyActivityScale(
+                title: 20, caption: 12, value: 24, tileLabel: 11,
+                avatar: 38, name: 14, detail: 12, time: 13, badge: 11,
+                rowPadding: new Thickness(10, 9), tilePadding: new Thickness(12, 10), shortTileLabels: true);
+            SetBodyColumns(1.55, 14);
             return;
         }
 
@@ -598,6 +632,60 @@ public partial class KioskPage : ContentPage
         Colon.FontSize = 40;
         ActivityCard.Padding = new Thickness(22, 22, 22, 8);
         ActivityGrid.RowSpacing = 18;
+        ApplyActivityScale(
+            title: 24, caption: 14, value: 30, tileLabel: 13,
+            avatar: 46, name: 16, detail: 13, time: 15, badge: 12,
+            rowPadding: new Thickness(12), tilePadding: new Thickness(14, 12), shortTileLabels: false);
+        SetBodyColumns(1.75, 20);
+    }
+
+    private void SetBodyColumns(double stageShare, double spacing)
+    {
+        BodyGrid.ColumnSpacing = spacing;
+        BodyGrid.ColumnDefinitions = new ColumnDefinitionCollection(
+            new ColumnDefinition(new GridLength(stageShare, GridUnitType.Star)),
+            new ColumnDefinition(new GridLength(1, GridUnitType.Star)));
+    }
+
+    /// <summary>
+    /// The activity rail sizes itself with the window. The rows live in a DataTemplate, so their sizes
+    /// come from app resources rather than named elements: on a short panel the avatar, name and badge
+    /// all shrink together, which is what stops every name truncating to "Loremae Pa…".
+    /// </summary>
+    private void ApplyActivityScale(
+        double title,
+        double caption,
+        double value,
+        double tileLabel,
+        double avatar,
+        double name,
+        double detail,
+        double time,
+        double badge,
+        Thickness rowPadding,
+        Thickness tilePadding,
+        bool shortTileLabels)
+    {
+        var resources = Microsoft.Maui.Controls.Application.Current?.Resources;
+        if (resources == null)
+            return;
+
+        resources["ActivityTitleSize"] = title;
+        resources["ActivityCaptionSize"] = caption;
+        resources["ActivityValueSize"] = value;
+        resources["ActivityTileLabelSize"] = tileLabel;
+        resources["RowAvatarSize"] = avatar;
+        resources["RowNameSize"] = name;
+        resources["RowDetailSize"] = detail;
+        resources["RowTimeSize"] = time;
+        resources["RowBadgeSize"] = badge;
+        resources["RowPadding"] = rowPadding;
+        resources["ActivityTilePadding"] = tilePadding;
+
+        // "In today" wraps to two lines in a narrow tile; the tile header already says what day it is.
+        OnShiftLabel.Text = "On shift";
+        InLabel.Text = shortTileLabels ? "In" : "In today";
+        OutLabel.Text = shortTileLabels ? "Out" : "Out today";
     }
 
     // ------------------------------------------------------------------ Scanner sizing and scan line
@@ -614,7 +702,12 @@ public partial class KioskPage : ContentPage
         const double haloScale = 1.95;
         const double margin = 12;
         var box = Math.Max(0, Math.Min(width, height) - margin * 2);
-        var cap = _compactLayout ? 420 : 560;
+        var cap = _density switch
+        {
+            StageDensity.Tight => 300,
+            StageDensity.Compact => 420,
+            _ => 560,
+        };
         var diameter = Math.Min(box / haloScale, cap);
         CameraFrame.WidthRequest = diameter;
         CameraFrame.HeightRequest = diameter;
@@ -987,4 +1080,17 @@ public partial class KioskPage : ContentPage
         Microsoft.Maui.Controls.Application.Current?.Resources.TryGetValue(key, out var value) == true && value is Color color
             ? color
             : fallback;
+}
+
+/// <summary>How much room the window gives the stage. Picked from the window height, not the width.</summary>
+internal enum StageDensity
+{
+    /// <summary>Tall enough for the roomy type and a large camera face.</summary>
+    Roomy,
+
+    /// <summary>1366×768-class panels: tighter spacing, smaller face.</summary>
+    Compact,
+
+    /// <summary>Under ~700px of window height: everything fixed has to shrink or the prompt is clipped.</summary>
+    Tight,
 }
