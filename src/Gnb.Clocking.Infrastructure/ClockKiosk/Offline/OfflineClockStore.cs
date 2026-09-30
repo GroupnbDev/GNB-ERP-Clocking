@@ -225,12 +225,6 @@ public sealed class OfflineClockStore : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
-    public async Task<int> CountRosterAsync()
-    {
-        var db = await ConnectionAsync().ConfigureAwait(false);
-        return await db.Table<RosterEntry>().CountAsync().ConfigureAwait(false);
-    }
-
     // ---------------------------------------------------------------- settings
 
     public async Task SetSettingAsync(string key, string value)

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Gnb.Clocking.App.Theming;
 using Microsoft.Maui.Controls.Shapes;
 
 namespace Gnb.Clocking.App.Controls;
@@ -13,7 +14,8 @@ public enum HaloMode
 }
 
 /// <summary>
-/// Colours are limited to the groupnb.ca palette (reds #AB1100 / #C70000, the Kadence grays, green #28A745).
+/// Brand reds (#AB1100 / #C70000) for the ready and capture rings; success and error come from
+/// <see cref="StatusColors"/> so they never match the brand.
 /// The rings around the kiosk camera, built as layers so the GPU does the moving:
 /// <list type="bullet">
 /// <item>the glow, the arcs and the dashed ring are drawn once, then only faded or rotated (layer transforms, no redraw);</item>
@@ -26,8 +28,6 @@ public sealed class ScannerHalo : Grid
 {
     public static readonly Color Crimson = Color.FromArgb("#C70000");
     public static readonly Color Red = Color.FromArgb("#AB1100");
-    public static readonly Color Green = Color.FromArgb("#28A745");
-    public static readonly Color Alarm = Color.FromArgb("#C70000");
 
     /// <summary>Matches the view model's pause between showing the badge and taking the photo.</summary>
     public const double CaptureSeconds = 0.7;
@@ -115,8 +115,8 @@ public sealed class ScannerHalo : Grid
 
         var accent = mode switch
         {
-            HaloMode.Success => Green,
-            HaloMode.Error => Alarm,
+            HaloMode.Success => StatusColors.SuccessSolid,
+            HaloMode.Error => StatusColors.ErrorSolid,
             _ => Crimson
         };
         if (!accent.Equals(_accent))
@@ -386,9 +386,9 @@ public sealed class ScannerHalo : Grid
             _mode = mode;
             _modeAt = _watch.Elapsed.TotalSeconds;
             if (mode == HaloMode.Success)
-                Burst(Green, 46, 120, 340);
+                Burst(StatusColors.SuccessSolid, 46, 120, 340);
             else if (mode == HaloMode.Error)
-                Burst(Alarm, 24, 80, 220);
+                Burst(StatusColors.ErrorSolid, 24, 80, 220);
         }
 
         public void Draw(ICanvas canvas, RectF rect)

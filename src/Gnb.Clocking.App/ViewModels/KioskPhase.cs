@@ -8,5 +8,7 @@ public enum KioskPhase
     Recognized,
     Hold,
     Success,
-    Unknown
+    Unknown,
+    /// <summary>The card is not linked to a Working candidate. The RFID dialog shows its number.</summary>
+    Unassigned
 }

@@ -22,17 +22,26 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     private readonly IClockCamera _camera;
     private readonly IClockPhotoStore _photos;
     private CandidateBadge? _badge;
-    private const int ClockInCooldownMinutes = ClockCooldownPolicy.AfterClockInMinutes;
-    private const int ClockOutCooldownMinutes = ClockCooldownPolicy.AfterClockOutMinutes;
     private readonly Dictionary<int, DateTimeOffset> _lastClockOut = new();
 
     /// <summary>Seconds the cooldown card stays up. Long enough to read the time it names.</summary>
     public const double HoldSeconds = 6;
 
+    /// <summary>Seconds the RFID dialog stays up. Long enough to write the number down; the next tap closes it.</summary>
+    public const double RfidDialogSeconds = 10;
+
     private string _holdTitle = "Please wait";
     private string _holdDetail = string.Empty;
     private string _holdSince = string.Empty;
     private string _holdReady = string.Empty;
+    private string _rfidNumber = string.Empty;
+    private string _rfidTitle = string.Empty;
+    private string _rfidDetail = string.Empty;
+    private string _rfidHolderName = string.Empty;
+    private string _rfidHolderStatus = string.Empty;
+    private bool _hasRfidHolder;
+    private bool _hasRfidHolderStatus;
+    private bool _isReassign;
     private int _returnTicket;
     private bool _started;
     private bool _busy;
@@ -49,15 +58,10 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     private bool _colonOn = true;
     private string _candidateName = string.Empty;
     private string _initials = string.Empty;
-    private string _candidateIdLine = string.Empty;
     private string _assignmentLine = string.Empty;
-    private string _statusPill = string.Empty;
     private string _statusDetail = string.Empty;
     private string _actionTitle = "Clock in";
-    private string _actionHint = string.Empty;
-    private string _actionError = string.Empty;
     private bool _isOnShift;
-    private bool _hasActionError;
     private bool _isBusy;
     private string _successTitle = string.Empty;
     private string _successTime = string.Empty;
@@ -66,7 +70,6 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     private bool _hasSuccessPhoto;
     private string _unknownMessage = string.Empty;
     private string _sessionCaption = "No punches yet";
-    private string _onShiftCaption = "Nobody on shift";
     private string _scopeLine = "GroupNB clock";
     private int _onShiftCount;
     private int _clockInsToday;
@@ -119,6 +122,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
                 KioskPhase.Reading => "Reading badge",
                 KioskPhase.Capturing => "Look at the camera",
                 KioskPhase.Hold => _holdTitle,
+                KioskPhase.Unassigned => _rfidTitle,
                 _ => "Hold a badge to the reader"
             };
             PromptDetail = value switch
@@ -126,6 +130,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
                 KioskPhase.Reading => "Matching it to a GroupNB candidate",
                 KioskPhase.Capturing => "Hold still. This frame is saved with the punch.",
                 KioskPhase.Hold => _holdDetail,
+                KioskPhase.Unassigned => $"RFID {_rfidNumber}",
                 _ => "A scan saves this frame. Times cannot be edited."
             };
         }
@@ -135,6 +140,17 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     public string HoldTitle { get => _holdTitle; private set => SetProperty(ref _holdTitle, value); }
     public string HoldSince { get => _holdSince; private set => SetProperty(ref _holdSince, value); }
     public string HoldReady { get => _holdReady; private set => SetProperty(ref _holdReady, value); }
+
+    /// <summary>RFID dialog: the card number staff assign (unknown card) or reassign (candidate not Working).</summary>
+    public string RfidNumber { get => _rfidNumber; private set => SetProperty(ref _rfidNumber, value); }
+    public string RfidTitle { get => _rfidTitle; private set => SetProperty(ref _rfidTitle, value); }
+    public string RfidDetail { get => _rfidDetail; private set => SetProperty(ref _rfidDetail, value); }
+    /// <summary>Who holds the card now, and the status that stops them clocking (reassign only).</summary>
+    public string RfidHolderName { get => _rfidHolderName; private set => SetProperty(ref _rfidHolderName, value); }
+    public string RfidHolderStatus { get => _rfidHolderStatus; private set => SetProperty(ref _rfidHolderStatus, value); }
+    public bool HasRfidHolder { get => _hasRfidHolder; private set => SetProperty(ref _hasRfidHolder, value); }
+    public bool HasRfidHolderStatus { get => _hasRfidHolderStatus; private set => SetProperty(ref _hasRfidHolderStatus, value); }
+    public bool IsReassign { get => _isReassign; private set => SetProperty(ref _isReassign, value); }
 
     public string BadgeText { get => _badgeText; set => SetProperty(ref _badgeText, value); }
     public string Prompt { get => _prompt; private set => SetProperty(ref _prompt, value); }
@@ -146,15 +162,10 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     public bool ColonOn { get => _colonOn; private set => SetProperty(ref _colonOn, value); }
     public string CandidateName { get => _candidateName; private set => SetProperty(ref _candidateName, value); }
     public string Initials { get => _initials; private set => SetProperty(ref _initials, value); }
-    public string CandidateIdLine { get => _candidateIdLine; private set => SetProperty(ref _candidateIdLine, value); }
     public string AssignmentLine { get => _assignmentLine; private set => SetProperty(ref _assignmentLine, value); }
-    public string StatusPill { get => _statusPill; private set => SetProperty(ref _statusPill, value); }
     public string StatusDetail { get => _statusDetail; private set => SetProperty(ref _statusDetail, value); }
     public string ActionTitle { get => _actionTitle; private set => SetProperty(ref _actionTitle, value); }
-    public string ActionHint { get => _actionHint; private set => SetProperty(ref _actionHint, value); }
-    public string ActionError { get => _actionError; private set => SetProperty(ref _actionError, value); }
     public bool IsOnShift { get => _isOnShift; private set => SetProperty(ref _isOnShift, value); }
-    public bool HasActionError { get => _hasActionError; private set => SetProperty(ref _hasActionError, value); }
     public bool IsBusy { get => _isBusy; private set => SetProperty(ref _isBusy, value); }
     public string SuccessTitle { get => _successTitle; private set => SetProperty(ref _successTitle, value); }
     public string SuccessTime { get => _successTime; private set => SetProperty(ref _successTime, value); }
@@ -163,7 +174,6 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     public bool HasSuccessPhoto { get => _hasSuccessPhoto; private set => SetProperty(ref _hasSuccessPhoto, value); }
     public string UnknownMessage { get => _unknownMessage; private set => SetProperty(ref _unknownMessage, value); }
     public string SessionCaption { get => _sessionCaption; private set => SetProperty(ref _sessionCaption, value); }
-    public string OnShiftCaption { get => _onShiftCaption; private set => SetProperty(ref _onShiftCaption, value); }
     public string ScopeLine { get => _scopeLine; private set => SetProperty(ref _scopeLine, value); }
     public int OnShiftCount { get => _onShiftCount; private set => SetProperty(ref _onShiftCount, value); }
     public int ClockInsToday { get => _clockInsToday; private set => SetProperty(ref _clockInsToday, value); }
@@ -214,7 +224,6 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         _returnTicket++;
         _busy = true;
         IsBusy = true;
-        ClearError();
         Phase = KioskPhase.Reading;
 
         try
@@ -224,9 +233,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             var badge = await _directory.FindByRfidAsync(rfid, lookup.Token);
             if (badge == null)
             {
-                UnknownMessage = $"No GroupNB candidate is linked to {rfid}.";
-                _badge = null;
-                Phase = KioskPhase.Unknown;
+                ShowRfidDialog(rfid, reassign: false, holderName: string.Empty, holderStatus: string.Empty);
                 return;
             }
 
@@ -256,6 +263,14 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             }
 
             await CaptureAndPunchAsync(badge, resetCompletedDay: false);
+        }
+        catch (BadgeNotWorkingException ex)
+        {
+            ShowRfidDialog(
+                string.IsNullOrWhiteSpace(ex.Rfid) ? rfid : ex.Rfid,
+                reassign: true,
+                ex.CandidateName.Trim(),
+                ex.Status?.Trim() ?? string.Empty);
         }
         catch (ClockingException ex)
         {
@@ -303,6 +318,28 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         Phase = KioskPhase.Hold;
         var ticket = ++_returnTicket;
         _ = ReturnToIdleAsync(ticket, TimeSpan.FromSeconds(HoldSeconds), KioskPhase.Hold);
+    }
+
+    /// <summary>
+    /// A card nobody Working can use. Shows its number for 10 seconds so staff can assign it in the ERP;
+    /// the reader stays live, and the next tap replaces this dialog straight away.
+    /// </summary>
+    private void ShowRfidDialog(string rfid, bool reassign, string holderName, string holderStatus)
+    {
+        _badge = null;
+        IsReassign = reassign;
+        RfidNumber = rfid;
+        RfidHolderName = holderName.Length > 0 ? $"Linked to {holderName}" : string.Empty;
+        RfidHolderStatus = holderStatus;
+        HasRfidHolder = holderName.Length > 0;
+        HasRfidHolderStatus = holderStatus.Length > 0;
+        RfidTitle = reassign ? "Reassign this RFID number" : "Assign this RFID number";
+        RfidDetail = reassign
+            ? "This card belongs to a candidate who is not Working. Reassign it to a Working candidate in the ERP."
+            : "This card is not in the ERP yet. Assign it to a candidate in the ERP.";
+        Phase = KioskPhase.Unassigned;
+        var ticket = ++_returnTicket;
+        _ = ReturnToIdleAsync(ticket, TimeSpan.FromSeconds(RfidDialogSeconds), KioskPhase.Unassigned);
     }
 
     private async Task CaptureAndPunchAsync(CandidateBadge badge, bool resetCompletedDay)
@@ -376,7 +413,6 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         UnknownMessage = string.Empty;
         SuccessPhoto = string.Empty;
         HasSuccessPhoto = false;
-        ClearError();
         Phase = KioskPhase.Idle;
     }
 
@@ -387,22 +423,13 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         IsOnShift = openAt.HasValue;
         CandidateName = badge.FullName;
         Initials = badge.Initials;
-        CandidateIdLine = string.IsNullOrWhiteSpace(badge.CardNumber)
-            ? string.Empty
-            : $"Card {badge.CardNumber}";
         AssignmentLine = $"{badge.Assignment}  ·  {badge.ClientName}  ·  {badge.Site}";
-        StatusPill = IsOnShift ? "On shift" : badge.ShiftFinished ? "Finished today" : "Off shift";
         StatusDetail = openAt is DateTimeOffset start
             ? $"Since {start.ToLocalTime():h:mm tt}  ·  {Format(Now() - start)} so far"
             : badge.ShiftFinished
                 ? "Today's times stay. The next tap starts extra time."
                 : "Ready to start a shift";
         ActionTitle = IsOnShift ? "Clock out" : badge.ShiftFinished ? "Extra time" : "Clock in";
-        ActionHint = IsOnShift
-            ? "Closes the open shift"
-            : badge.ShiftFinished
-                ? "Starts extra time. Today's clock in and clock out stay."
-                : $"Starts {badge.FirstName}'s shift";
     }
 
     private async Task ReturnToIdleAsync(int ticket, TimeSpan delay, KioskPhase phase)
@@ -519,7 +546,6 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         var count = rows.Length;
         SessionCaption = count == 0 ? "No punches yet today" : count == 1 ? "1 event today" : $"{count} events today";
         var open = _clocking.OpenCount;
-        OnShiftCaption = open == 0 ? "Nobody on shift" : open == 1 ? "1 on shift" : $"{open} on shift";
         OnShiftCount = open;
 
         ClockInsToday = events.Count(e => e.Action == ClockAction.In && e.At.ToLocalTime().Date == today);
@@ -568,12 +594,6 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             added[i].IsFresh = animate;
             Punches.Insert(0, added[i]);
         }
-    }
-
-    private void ClearError()
-    {
-        ActionError = string.Empty;
-        HasActionError = false;
     }
 
     private DateTimeOffset Now() => _clock.Now.ToLocalTime();

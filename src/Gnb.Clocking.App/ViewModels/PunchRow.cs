@@ -1,4 +1,5 @@
 using Gnb.Clocking.Domain.Clocking;
+using Gnb.Clocking.App.Theming;
 using Microsoft.Maui.Graphics;
 
 namespace Gnb.Clocking.App.ViewModels;
@@ -12,7 +13,6 @@ public sealed class PunchRow
     public required string Time { get; init; }
     public required string Detail { get; init; }
     public required Color Accent { get; init; }
-    public required Color Tint { get; init; }
     public string? PhotoPath { get; init; }
     public bool HasPhoto { get; init; }
     public bool ShowInitials { get; init; }
@@ -20,10 +20,11 @@ public sealed class PunchRow
     /// <summary>True for a punch that arrived after the first load; the list animates it in once.</summary>
     public bool IsFresh { get; set; }
 
-    /// <summary>Saved on this device but not yet accepted by the server.</summary>
-    public bool ShowSyncNote { get; init; }
-    public string SyncNote { get; init; } = string.Empty;
-    public Color SyncNoteColor { get; init; } = Colors.Transparent;
+    /// <summary>Saved on this device but not yet accepted by the server (Warning).</summary>
+    public bool ShowPendingNote { get; init; }
+
+    /// <summary>The server refused it on sync (Error). Staff decide what happens to it.</summary>
+    public bool ShowAttentionNote { get; init; }
 
     public static PunchRow From(ClockEvent clockEvent)
     {
@@ -32,14 +33,13 @@ public sealed class PunchRow
             ? $"{clockEvent.Assignment} · {hours:0.##}h"
             : clockEvent.Assignment;
 
-        var accent = Color.FromArgb(arrived ? "#C70000" : "#718096");
-        var pending = clockEvent.PendingSync || clockEvent.NeedsAttention;
+        // Clock in and out are normal events: brand for in, neutral slate for out. Never a status colour.
+        var accent = arrived ? StatusColors.Brand : Color.FromArgb("#475569");
         return new PunchRow
         {
             Key = $"{clockEvent.CandidateId}|{clockEvent.Action}|{clockEvent.At.UtcTicks}",
-            ShowSyncNote = pending,
-            SyncNote = clockEvent.NeedsAttention ? "Needs attention" : "Saved here, not synced",
-            SyncNoteColor = Color.FromArgb(clockEvent.NeedsAttention ? "#C70000" : "#F59E0B"),
+            ShowPendingNote = clockEvent.PendingSync && !clockEvent.NeedsAttention,
+            ShowAttentionNote = clockEvent.NeedsAttention,
             Initials = clockEvent.Initials,
             Name = clockEvent.CandidateName,
             Action = clockEvent.IsExtra
@@ -48,7 +48,6 @@ public sealed class PunchRow
             Time = clockEvent.At.ToLocalTime().ToString("h:mm tt"),
             Detail = detail,
             Accent = accent,
-            Tint = accent.WithAlpha(0.14f),
             PhotoPath = clockEvent.PhotoAbsolutePath,
             HasPhoto = !string.IsNullOrWhiteSpace(clockEvent.PhotoAbsolutePath),
             ShowInitials = string.IsNullOrWhiteSpace(clockEvent.PhotoAbsolutePath)

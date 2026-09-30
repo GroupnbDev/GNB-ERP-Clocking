@@ -46,7 +46,7 @@
                             <Border x:Name="LiveRipple" WidthRequest="10" HeightRequest="10" StrokeThickness="0"
                                     StrokeShape="RoundRectangle 5" BackgroundColor="{StaticResource Highlight}"
                                     HorizontalOptions="Center" VerticalOptions="Center" />
-                            <Border x:Name="LiveDot" WidthRequest="10" HeightRequest="10" StrokeThickness="0"
+                            <Border WidthRequest="10" HeightRequest="10" StrokeThickness="0"
                                     StrokeShape="RoundRectangle 5" BackgroundColor="{StaticResource Highlight}"
                                     HorizontalOptions="Center" VerticalOptions="Center" />
                         </Grid>
@@ -59,10 +59,10 @@
                         <BoxView WidthRequest="1" HeightRequest="16" Color="{DynamicResource Line}" VerticalOptions="Center"
                                  IsVisible="{Binding HasOfflineWork}" />
                         <Border IsVisible="{Binding HasOfflineWork}" Padding="10,4" StrokeThickness="1"
-                                StrokeShape="RoundRectangle 12" BackgroundColor="#33F59E0B" Stroke="#F59E0B"
-                                VerticalOptions="Center">
+                                StrokeShape="RoundRectangle 12" BackgroundColor="{DynamicResource WarningSoft}"
+                                Stroke="{DynamicResource WarningBorder}" VerticalOptions="Center">
                             <Label Text="{Binding OfflineCaption}" FontFamily="OpenSansSemibold" FontSize="13"
-                                   TextColor="#F59E0B" VerticalOptions="Center" />
+                                   TextColor="{DynamicResource WarningText}" VerticalOptions="Center" />
                         </Border>
                     </HorizontalStackLayout>
                 </Border>
@@ -207,12 +207,12 @@
 
                             <Border x:Name="SuccessBadge" IsVisible="False" WidthRequest="64" HeightRequest="64"
                                     StrokeThickness="4" Stroke="{DynamicResource Canvas}" StrokeShape="RoundRectangle 32"
-                                    BackgroundColor="{StaticResource Success}"
+                                    BackgroundColor="{DynamicResource SuccessSolid}"
                                     HorizontalOptions="Center" VerticalOptions="Center" InputTransparent="True">
                                 <Border.Shadow>
-                                    <Shadow Brush="#28A745" Opacity="0.6" Radius="20" />
+                                    <Shadow Brush="#15803D" Opacity="0.5" Radius="20" />
                                 </Border.Shadow>
-                                <Label Text="✓" FontFamily="OpenSansSemibold" FontSize="30" TextColor="#FFFFFF"
+                                <Label Text="✓" FontFamily="OpenSansSemibold" FontSize="30" TextColor="{DynamicResource SuccessOnSolid}"
                                        HorizontalTextAlignment="Center" VerticalTextAlignment="Center" />
                             </Border>
 
@@ -253,14 +253,14 @@
 
                             <Border x:Name="UnknownBanner" IsVisible="False" VerticalOptions="Start" HorizontalOptions="Center"
                                     Padding="14,12,20,12" Margin="0,4,0,0" StrokeThickness="1" StrokeShape="RoundRectangle 18"
-                                    BackgroundColor="{DynamicResource DangerSoft}" Stroke="{DynamicResource Danger}">
+                                    BackgroundColor="{DynamicResource ErrorSoft}" Stroke="{DynamicResource ErrorBorder}">
                                 <HorizontalStackLayout Spacing="12">
                                     <Border WidthRequest="26" HeightRequest="26" StrokeThickness="0" StrokeShape="RoundRectangle 13"
-                                            BackgroundColor="#FFFFFF" VerticalOptions="Center">
-                                        <Label Text="!" FontFamily="OpenSansSemibold" FontSize="15" TextColor="{DynamicResource Danger}"
-                                               HorizontalTextAlignment="Center" VerticalTextAlignment="Center" />
+                                            BackgroundColor="{DynamicResource ErrorSolid}" VerticalOptions="Center">
+                                        <Label Text="×" FontFamily="OpenSansSemibold" FontSize="17" TextColor="{DynamicResource ErrorOnSolid}"
+                                               HorizontalTextAlignment="Center" VerticalTextAlignment="Center" Margin="0,-2,0,0" />
                                     </Border>
-                                    <Label Text="{Binding UnknownMessage}" TextColor="#FFFFFF" FontSize="16"
+                                    <Label Text="{Binding UnknownMessage}" TextColor="{DynamicResource Ink}" FontSize="16"
                                            FontFamily="OpenSansSemibold" VerticalOptions="Center" MaximumWidthRequest="560"
                                            LineBreakMode="WordWrap" />
                                 </HorizontalStackLayout>
@@ -280,20 +280,21 @@
                             <VerticalStackLayout x:Name="SuccessPanel" IsVisible="False" Spacing="0"
                                                  HorizontalOptions="Center" VerticalOptions="Center">
                                 <Label Text="{Binding SuccessTitle}" FontFamily="OpenSansSemibold" FontSize="16" CharacterSpacing="2"
-                                       TextColor="{StaticResource Success}" HorizontalTextAlignment="Center" />
+                                       TextColor="{DynamicResource SuccessText}" HorizontalTextAlignment="Center" />
                                 <Label x:Name="SuccessTimeLabel" Text="{Binding SuccessTime}" FontFamily="OpenSansSemibold" FontSize="58"
                                        HorizontalTextAlignment="Center" Margin="0,-6,0,-4" />
                                 <Label Text="{Binding SuccessDetail}" FontSize="16" TextColor="{DynamicResource Muted}"
                                        HorizontalTextAlignment="Center" />
                                 <Border IsVisible="{Binding SuccessSavedHere}" Padding="12,6" Margin="0,8,0,0"
                                         StrokeThickness="1" StrokeShape="RoundRectangle 14"
-                                        BackgroundColor="#33F59E0B" Stroke="#F59E0B" HorizontalOptions="Center">
+                                        BackgroundColor="{DynamicResource WarningSoft}" Stroke="{DynamicResource WarningBorder}"
+                                        HorizontalOptions="Center">
                                     <Label Text="Saved on this clock — it will sync when the office is back"
-                                           FontFamily="OpenSansSemibold" FontSize="14" TextColor="#F59E0B" />
+                                           FontFamily="OpenSansSemibold" FontSize="14" TextColor="{DynamicResource WarningText}" />
                                 </Border>
                                 <Grid WidthRequest="220" HeightRequest="4" Margin="0,12,0,0" HorizontalOptions="Center">
                                     <BoxView Color="{DynamicResource Line}" CornerRadius="2" />
-                                    <BoxView x:Name="CountdownFill" Color="{StaticResource Success}" CornerRadius="2" AnchorX="0" />
+                                    <BoxView x:Name="CountdownFill" Color="{DynamicResource SuccessSolid}" CornerRadius="2" AnchorX="0" />
                                 </Grid>
                             </VerticalStackLayout>
                         </Grid>
@@ -316,10 +317,10 @@
                                 <HorizontalStackLayout Spacing="8">
                                     <Grid WidthRequest="12" HeightRequest="12" VerticalOptions="Center">
                                         <Border x:Name="FeedRipple" WidthRequest="8" HeightRequest="8" StrokeThickness="0"
-                                                StrokeShape="RoundRectangle 4" BackgroundColor="{StaticResource Success}"
+                                                StrokeShape="RoundRectangle 4" BackgroundColor="{DynamicResource SuccessSolid}"
                                                 HorizontalOptions="Center" VerticalOptions="Center" />
                                         <Border WidthRequest="8" HeightRequest="8" StrokeThickness="0"
-                                                StrokeShape="RoundRectangle 4" BackgroundColor="{StaticResource Success}"
+                                                StrokeShape="RoundRectangle 4" BackgroundColor="{DynamicResource SuccessSolid}"
                                                 HorizontalOptions="Center" VerticalOptions="Center" />
                                     </Grid>
                                     <Label Text="Live" FontFamily="OpenSansSemibold" FontSize="13" VerticalOptions="Center" />
@@ -328,7 +329,7 @@
                         </Grid>
 
                         <Grid Grid.Row="1" ColumnDefinitions="*,*,*" ColumnSpacing="10">
-                            <Border x:Name="OnShiftTile" Padding="{DynamicResource ActivityTilePadding}" StrokeThickness="0" StrokeShape="RoundRectangle 20">
+                            <Border Padding="{DynamicResource ActivityTilePadding}" StrokeThickness="0" StrokeShape="RoundRectangle 20">
                                 <Border.Background>
                                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                                         <GradientStop Color="{StaticResource Brand}" Offset="0" />
@@ -344,7 +345,7 @@
                                            TextColor="#E6FFFFFF" LineBreakMode="NoWrap" />
                                 </VerticalStackLayout>
                             </Border>
-                            <Border x:Name="InTile" Grid.Column="1" Padding="{DynamicResource ActivityTilePadding}" StrokeThickness="1" StrokeShape="RoundRectangle 20"
+                            <Border Grid.Column="1" Padding="{DynamicResource ActivityTilePadding}" StrokeThickness="1" StrokeShape="RoundRectangle 20"
                                     BackgroundColor="{DynamicResource Glass}" Stroke="{DynamicResource Line}">
                                 <VerticalStackLayout Spacing="0">
                                     <Label x:Name="InValue" Text="0" FontFamily="OpenSansSemibold" FontSize="{DynamicResource ActivityValueSize}" />
@@ -352,7 +353,7 @@
                                            TextColor="{DynamicResource Muted}" LineBreakMode="NoWrap" />
                                 </VerticalStackLayout>
                             </Border>
-                            <Border x:Name="OutTile" Grid.Column="2" Padding="{DynamicResource ActivityTilePadding}" StrokeThickness="1" StrokeShape="RoundRectangle 20"
+                            <Border Grid.Column="2" Padding="{DynamicResource ActivityTilePadding}" StrokeThickness="1" StrokeShape="RoundRectangle 20"
                                     BackgroundColor="{DynamicResource Glass}" Stroke="{DynamicResource Line}">
                                 <VerticalStackLayout Spacing="0">
                                     <Label x:Name="OutValue" Text="0" FontFamily="OpenSansSemibold" FontSize="{DynamicResource ActivityValueSize}" />
@@ -426,12 +427,20 @@
                                                     <Label Text="{Binding Detail}" FontSize="{DynamicResource RowDetailSize}" TextColor="{DynamicResource Faint}"
                                                            LineBreakMode="TailTruncation" />
                                                     <!-- Captured here during an outage: the shift is real, the server just has not seen it. -->
-                                                    <HorizontalStackLayout Spacing="6" IsVisible="{Binding ShowSyncNote}">
+                                                    <HorizontalStackLayout Spacing="6" IsVisible="{Binding ShowPendingNote}">
                                                         <Border WidthRequest="6" HeightRequest="6" StrokeThickness="0"
-                                                                StrokeShape="RoundRectangle 3" BackgroundColor="{Binding SyncNoteColor}"
+                                                                StrokeShape="RoundRectangle 3" BackgroundColor="{DynamicResource WarningSolid}"
                                                                 VerticalOptions="Center" />
-                                                        <Label Text="{Binding SyncNote}" FontFamily="OpenSansSemibold" FontSize="12"
-                                                               TextColor="{Binding SyncNoteColor}" />
+                                                        <Label Text="Saved here, not synced" FontFamily="OpenSansSemibold" FontSize="12"
+                                                               TextColor="{DynamicResource WarningText}" />
+                                                    </HorizontalStackLayout>
+                                                    <!-- Refused by the server on sync: an error, not a pending note. -->
+                                                    <HorizontalStackLayout Spacing="6" IsVisible="{Binding ShowAttentionNote}">
+                                                        <Border WidthRequest="6" HeightRequest="6" StrokeThickness="0"
+                                                                StrokeShape="RoundRectangle 3" BackgroundColor="{DynamicResource ErrorSolid}"
+                                                                VerticalOptions="Center" />
+                                                        <Label Text="Needs attention" FontFamily="OpenSansSemibold" FontSize="12"
+                                                               TextColor="{DynamicResource ErrorText}" />
                                                     </HorizontalStackLayout>
                                                 </VerticalStackLayout>
                                                 <VerticalStackLayout Grid.Column="2" VerticalOptions="Center" Spacing="4">
@@ -462,87 +471,208 @@
             </Grid>
         </Grid>
 
-        <!-- ============ Cooldown: this tap is too soon ============ -->
+        <!-- ============ Cooldown: this tap is too soon. Neutral: nothing is wrong, just wait. ============ -->
         <Grid x:Name="HoldOverlay" IsVisible="False">
             <BoxView x:Name="HoldScrim" Color="#0B0F16" Opacity="0" />
 
             <Border x:Name="HoldCard" HorizontalOptions="Center" VerticalOptions="Center"
-                    MaximumWidthRequest="720" Padding="36,30,36,26" StrokeThickness="2"
-                    BackgroundColor="{DynamicResource Canvas}" Stroke="#F59E0B"
+                    MaximumWidthRequest="720" Padding="0" StrokeThickness="1.5"
+                    BackgroundColor="{DynamicResource Canvas}" Stroke="{DynamicResource NeutralBorder}"
                     StrokeShape="RoundRectangle 34">
                 <Border.Shadow>
                     <Shadow Brush="#000000" Opacity="0.55" Radius="60" Offset="0,18" />
                 </Border.Shadow>
 
-                <VerticalStackLayout Spacing="18">
+                <Grid RowDefinitions="Auto,Auto">
+                    <BoxView HeightRequest="5" Color="{DynamicResource NeutralSolid}" />
 
-                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16">
-                        <Border WidthRequest="58" HeightRequest="58" StrokeThickness="0"
-                                StrokeShape="RoundRectangle 18" BackgroundColor="#F59E0B" VerticalOptions="Center">
-                            <Label Text="!" FontFamily="OpenSansSemibold" FontSize="30" TextColor="#1A202C"
-                                   HorizontalTextAlignment="Center" VerticalTextAlignment="Center" />
-                        </Border>
-                        <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
-                            <Label Text="{Binding CandidateName}" FontFamily="OpenSansSemibold" FontSize="24"
-                                   LineBreakMode="TailTruncation" />
-                            <Label Text="{Binding AssignmentLine}" FontSize="14" TextColor="{DynamicResource Muted}"
-                                   LineBreakMode="TailTruncation" />
-                        </VerticalStackLayout>
-                    </Grid>
+                    <VerticalStackLayout Grid.Row="1" Spacing="18" Padding="36,26,36,26">
 
-                    <BoxView HeightRequest="1" Color="{DynamicResource Line}" />
-
-                    <VerticalStackLayout Spacing="8">
-                        <Label Text="{Binding HoldTitle}" FontFamily="OpenSansSemibold" FontSize="34"
-                               HorizontalTextAlignment="Center" />
-                        <Label Text="{Binding HoldSince}" FontSize="18" TextColor="{DynamicResource Muted}"
-                               HorizontalTextAlignment="Center" />
-                    </VerticalStackLayout>
-
-                    <!-- The one line that matters: when they may tap again. -->
-                    <Border Padding="24,16" StrokeThickness="0" StrokeShape="RoundRectangle 20"
-                            BackgroundColor="#F59E0B" HorizontalOptions="Center">
-                        <Label Text="{Binding HoldReady}" FontFamily="OpenSansSemibold" FontSize="24"
-                               TextColor="#1A202C" HorizontalTextAlignment="Center" />
-                    </Border>
-
-                    <Label Text="Nothing was saved for this tap. Your earlier punch still stands."
-                           FontSize="15" TextColor="{DynamicResource Muted}" HorizontalTextAlignment="Center" />
-
-                    <Border x:Name="HoldNextPersonStrip" Padding="16,13" StrokeThickness="2"
-                            StrokeShape="RoundRectangle 20" BackgroundColor="{DynamicResource Glass}"
-                            Stroke="{StaticResource Brand}">
-                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
-                            <Grid WidthRequest="44" HeightRequest="44" VerticalOptions="Center">
-                                <Border x:Name="HoldNextPersonPulse" WidthRequest="44" HeightRequest="44"
-                                        StrokeThickness="0" StrokeShape="RoundRectangle 14"
-                                        BackgroundColor="{StaticResource Brand}"
-                                        HorizontalOptions="Center" VerticalOptions="Center" />
-                                <Border WidthRequest="44" HeightRequest="44" StrokeThickness="0"
-                                        StrokeShape="RoundRectangle 14" HorizontalOptions="Center" VerticalOptions="Center">
-                                    <Border.Background>
-                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                            <GradientStop Color="{StaticResource Brand}" Offset="0" />
-                                            <GradientStop Color="{StaticResource Highlight}" Offset="1" />
-                                        </LinearGradientBrush>
-                                    </Border.Background>
-                                    <Label Text="ID" FontFamily="OpenSansSemibold" FontSize="15" TextColor="#FFFFFF"
-                                           HorizontalTextAlignment="Center" VerticalTextAlignment="Center" />
-                                </Border>
-                            </Grid>
-                            <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="1">
-                                <Label Text="Next person: tap your badge now" FontFamily="OpenSansSemibold" FontSize="19" />
-                                <Label Text="The reader is live. This message closes on its own."
-                                       FontSize="15" TextColor="{DynamicResource Muted}" />
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16">
+                            <!-- Clock glyph drawn with shapes: OpenSans has no clock character. -->
+                            <Border WidthRequest="58" HeightRequest="58" StrokeThickness="1"
+                                    StrokeShape="RoundRectangle 18" BackgroundColor="{DynamicResource NeutralSoft}"
+                                    Stroke="{DynamicResource NeutralBorder}" VerticalOptions="Center">
+                                <Grid WidthRequest="28" HeightRequest="28" HorizontalOptions="Center" VerticalOptions="Center">
+                                    <Ellipse Stroke="{DynamicResource NeutralSolid}" StrokeThickness="2.5" />
+                                    <BoxView WidthRequest="2.5" HeightRequest="9" Color="{DynamicResource NeutralSolid}"
+                                             HorizontalOptions="Center" VerticalOptions="Start" Margin="0,6,0,0" CornerRadius="1" />
+                                    <BoxView WidthRequest="7" HeightRequest="2.5" Color="{DynamicResource NeutralSolid}"
+                                             HorizontalOptions="Start" VerticalOptions="Center" Margin="13.5,1,0,0" CornerRadius="1" />
+                                </Grid>
+                            </Border>
+                            <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
+                                <Label Text="{Binding CandidateName}" FontFamily="OpenSansSemibold" FontSize="24"
+                                       LineBreakMode="TailTruncation" />
+                                <Label Text="{Binding AssignmentLine}" FontSize="14" TextColor="{DynamicResource Muted}"
+                                       LineBreakMode="TailTruncation" />
                             </VerticalStackLayout>
                         </Grid>
-                    </Border>
 
-                    <Grid HeightRequest="6" WidthRequest="280" HorizontalOptions="Center">
-                        <BoxView Color="{DynamicResource Line}" CornerRadius="3" />
-                        <BoxView x:Name="HoldAutoFill" Color="#F59E0B" CornerRadius="3" AnchorX="0" />
-                    </Grid>
-                </VerticalStackLayout>
+                        <BoxView HeightRequest="1" Color="{DynamicResource Line}" />
+
+                        <VerticalStackLayout Spacing="8">
+                            <Label Text="{Binding HoldTitle}" FontFamily="OpenSansSemibold" FontSize="34"
+                                   HorizontalTextAlignment="Center" />
+                            <Label Text="{Binding HoldSince}" FontSize="18" TextColor="{DynamicResource Muted}"
+                                   HorizontalTextAlignment="Center" />
+                        </VerticalStackLayout>
+
+                        <!-- The one line that matters: when they may tap again. -->
+                        <Border Padding="24,16" StrokeThickness="1" StrokeShape="RoundRectangle 20"
+                                BackgroundColor="{DynamicResource NeutralSoft}" Stroke="{DynamicResource NeutralBorder}"
+                                HorizontalOptions="Center">
+                            <Label Text="{Binding HoldReady}" FontFamily="OpenSansSemibold" FontSize="24"
+                                   TextColor="{DynamicResource Ink}" HorizontalTextAlignment="Center" />
+                        </Border>
+
+                        <Label Text="Nothing was saved for this tap. Your earlier punch still stands."
+                               FontSize="15" TextColor="{DynamicResource Muted}" HorizontalTextAlignment="Center" />
+
+                        <Border Padding="16,13" StrokeThickness="1"
+                                StrokeShape="RoundRectangle 20" BackgroundColor="{DynamicResource Glass}"
+                                Stroke="{DynamicResource LineStrong}">
+                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
+                                <Grid WidthRequest="44" HeightRequest="44" VerticalOptions="Center">
+                                    <Border x:Name="HoldNextPersonPulse" WidthRequest="44" HeightRequest="44"
+                                            StrokeThickness="0" StrokeShape="RoundRectangle 14"
+                                            BackgroundColor="{DynamicResource NeutralBorder}"
+                                            HorizontalOptions="Center" VerticalOptions="Center" />
+                                    <Border WidthRequest="44" HeightRequest="44" StrokeThickness="0"
+                                            StrokeShape="RoundRectangle 14" HorizontalOptions="Center" VerticalOptions="Center">
+                                        <Border.Background>
+                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                <GradientStop Color="{StaticResource Brand}" Offset="0" />
+                                                <GradientStop Color="{StaticResource Highlight}" Offset="1" />
+                                            </LinearGradientBrush>
+                                        </Border.Background>
+                                        <Label Text="ID" FontFamily="OpenSansSemibold" FontSize="15" TextColor="#FFFFFF"
+                                               HorizontalTextAlignment="Center" VerticalTextAlignment="Center" />
+                                    </Border>
+                                </Grid>
+                                <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="1">
+                                    <Label Text="Next person: tap your badge now" FontFamily="OpenSansSemibold" FontSize="19" />
+                                    <Label Text="The reader is live. This message closes on its own."
+                                           FontSize="15" TextColor="{DynamicResource Muted}" />
+                                </VerticalStackLayout>
+                            </Grid>
+                        </Border>
+
+                        <Grid HeightRequest="6" WidthRequest="280" HorizontalOptions="Center">
+                            <BoxView Color="{DynamicResource Line}" CornerRadius="3" />
+                            <BoxView x:Name="HoldAutoFill" Color="{DynamicResource NeutralSolid}" CornerRadius="3" AnchorX="0" />
+                        </Grid>
+                    </VerticalStackLayout>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ============ RFID dialog: Warning. The card is not linked to a Working candidate; staff must act. ============ -->
+        <Grid x:Name="RfidOverlay" IsVisible="False">
+            <BoxView x:Name="RfidScrim" Color="#0B0F16" Opacity="0">
+                <BoxView.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnRfidScrimTapped" />
+                </BoxView.GestureRecognizers>
+            </BoxView>
+
+            <Border x:Name="RfidCard" HorizontalOptions="Center" VerticalOptions="Center"
+                    MaximumWidthRequest="720" Padding="0" StrokeThickness="1.5"
+                    BackgroundColor="{DynamicResource Canvas}" Stroke="{DynamicResource WarningBorder}"
+                    StrokeShape="RoundRectangle 34">
+                <Border.Shadow>
+                    <Shadow Brush="#000000" Opacity="0.55" Radius="60" Offset="0,18" />
+                </Border.Shadow>
+
+                <Grid RowDefinitions="Auto,Auto">
+                    <BoxView HeightRequest="5" Color="{DynamicResource WarningSolid}" />
+
+                    <VerticalStackLayout Grid.Row="1" Spacing="18" Padding="36,26,36,26">
+
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16">
+                            <Border WidthRequest="58" HeightRequest="58" StrokeThickness="1"
+                                    StrokeShape="RoundRectangle 18" BackgroundColor="{DynamicResource WarningSoft}"
+                                    Stroke="{DynamicResource WarningBorder}" VerticalOptions="Center">
+                                <Label x:Name="RfidIconLabel" Text="!" FontFamily="OpenSansSemibold" FontSize="28"
+                                       TextColor="{DynamicResource WarningText}"
+                                       HorizontalTextAlignment="Center" VerticalTextAlignment="Center" />
+                            </Border>
+                            <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="4">
+                                <Label Text="{Binding RfidTitle}" FontFamily="OpenSansSemibold" FontSize="26"
+                                       LineBreakMode="TailTruncation" />
+                                <HorizontalStackLayout Spacing="10" IsVisible="{Binding HasRfidHolder}">
+                                    <Label Text="{Binding RfidHolderName}" FontSize="15" TextColor="{DynamicResource Muted}"
+                                           VerticalOptions="Center" LineBreakMode="TailTruncation" MaximumWidthRequest="420" />
+                                    <!-- Why the card was refused. Neutral: the kiosk does not grade statuses. -->
+                                    <Border IsVisible="{Binding HasRfidHolderStatus}" Padding="10,3" StrokeThickness="1"
+                                            StrokeShape="RoundRectangle 11" BackgroundColor="{DynamicResource NeutralSoft}"
+                                            Stroke="{DynamicResource NeutralBorder}" VerticalOptions="Center">
+                                        <HorizontalStackLayout Spacing="6">
+                                            <Border WidthRequest="6" HeightRequest="6" StrokeThickness="0"
+                                                    StrokeShape="RoundRectangle 3" BackgroundColor="{DynamicResource NeutralSolid}"
+                                                    VerticalOptions="Center" />
+                                            <Label Text="{Binding RfidHolderStatus}" FontFamily="OpenSansSemibold" FontSize="13"
+                                                   TextColor="{DynamicResource Ink}" VerticalOptions="Center" />
+                                        </HorizontalStackLayout>
+                                    </Border>
+                                </HorizontalStackLayout>
+                            </VerticalStackLayout>
+                        </Grid>
+
+                        <BoxView HeightRequest="1" Color="{DynamicResource Line}" />
+
+                        <!-- The one thing staff need: the number to type into the ERP. Data, so Ink, not a status colour. -->
+                        <VerticalStackLayout Spacing="8">
+                            <Label Text="RFID NUMBER" FontFamily="OpenSansSemibold" FontSize="13" CharacterSpacing="3"
+                                   TextColor="{DynamicResource Muted}" HorizontalTextAlignment="Center" />
+                            <Border x:Name="RfidNumberChip" Padding="28,12" StrokeThickness="1.5" StrokeShape="RoundRectangle 20"
+                                    BackgroundColor="{DynamicResource WarningSoft}" Stroke="{DynamicResource WarningBorder}"
+                                    HorizontalOptions="Center">
+                                <Label Text="{Binding RfidNumber}" FontFamily="OpenSansSemibold" FontSize="40"
+                                       CharacterSpacing="4" TextColor="{DynamicResource Ink}" HorizontalTextAlignment="Center" />
+                            </Border>
+                        </VerticalStackLayout>
+
+                        <Label Text="{Binding RfidDetail}" FontSize="16" TextColor="{DynamicResource Muted}"
+                               HorizontalTextAlignment="Center" MaximumWidthRequest="600" />
+
+                        <Label Text="Nothing was saved for this tap."
+                               FontSize="15" TextColor="{DynamicResource Muted}" HorizontalTextAlignment="Center" />
+
+                        <Border Padding="16,13" StrokeThickness="1"
+                                StrokeShape="RoundRectangle 20" BackgroundColor="{DynamicResource Glass}"
+                                Stroke="{DynamicResource LineStrong}">
+                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
+                                <Grid WidthRequest="44" HeightRequest="44" VerticalOptions="Center">
+                                    <Border x:Name="RfidNextPersonPulse" WidthRequest="44" HeightRequest="44"
+                                            StrokeThickness="0" StrokeShape="RoundRectangle 14"
+                                            BackgroundColor="{DynamicResource NeutralBorder}"
+                                            HorizontalOptions="Center" VerticalOptions="Center" />
+                                    <Border WidthRequest="44" HeightRequest="44" StrokeThickness="0"
+                                            StrokeShape="RoundRectangle 14" HorizontalOptions="Center" VerticalOptions="Center">
+                                        <Border.Background>
+                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                <GradientStop Color="{StaticResource Brand}" Offset="0" />
+                                                <GradientStop Color="{StaticResource Highlight}" Offset="1" />
+                                            </LinearGradientBrush>
+                                        </Border.Background>
+                                        <Label Text="ID" FontFamily="OpenSansSemibold" FontSize="15" TextColor="#FFFFFF"
+                                               HorizontalTextAlignment="Center" VerticalTextAlignment="Center" />
+                                    </Border>
+                                </Grid>
+                                <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="1">
+                                    <Label Text="Next person: tap your badge now" FontFamily="OpenSansSemibold" FontSize="19" />
+                                    <Label Text="The reader is live. This message closes in 10 seconds."
+                                           FontSize="15" TextColor="{DynamicResource Muted}" />
+                                </VerticalStackLayout>
+                            </Grid>
+                        </Border>
+
+                        <Grid HeightRequest="6" WidthRequest="280" HorizontalOptions="Center">
+                            <BoxView Color="{DynamicResource Line}" CornerRadius="3" />
+                            <BoxView x:Name="RfidAutoFill" Color="{DynamicResource WarningSolid}" CornerRadius="3" AnchorX="0" />
+                        </Grid>
+                    </VerticalStackLayout>
+                </Grid>
             </Border>
         </Grid>
     </Grid>

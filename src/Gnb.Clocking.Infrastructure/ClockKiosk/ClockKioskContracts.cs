@@ -87,3 +87,10 @@ internal sealed record OpenShift(
     [property: JsonPropertyName("open_clock_in")] DateTimeOffset OpenClockIn);
 
 internal sealed record ApiError([property: JsonPropertyName("error")] string? Error);
+
+/// <summary>409 from the badge lookup: the card is linked, but its candidate is not Working.</summary>
+internal sealed record BadgeNotWorkingError(
+    [property: JsonPropertyName("error")] string? Error,
+    [property: JsonPropertyName("rfid")] string? Rfid,
+    [property: JsonPropertyName("candidate_name")] string? CandidateName,
+    [property: JsonPropertyName("status")] string? Status);

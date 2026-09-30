@@ -15,11 +15,11 @@ public partial class KioskPage : ContentPage
     private const uint ReturnToIdleMs = 3600;
     private const string HoldNextPersonLoop = "hold-next-person";
     private const uint HoldWindowMs = (uint)(KioskViewModel.HoldSeconds * 1000);
+    private const string RfidNextPersonLoop = "rfid-next-person";
+    private const uint RfidWindowMs = (uint)(KioskViewModel.RfidDialogSeconds * 1000);
 
     private static readonly Color Crimson = ScannerHalo.Crimson;
     private static readonly Color Red = ScannerHalo.Red;
-    private static readonly Color Green = ScannerHalo.Green;
-    private static readonly Color Alarm = ScannerHalo.Alarm;
     private static readonly Color Slate = Color.FromArgb("#718096");
 
     private static readonly string[] StepNames = { "Scan badge", "Match", "Capture", "Saved" };
@@ -257,7 +257,7 @@ public partial class KioskPage : ContentPage
     }
 
     /// <summary>
-    /// Cooldown card: a tap that came too soon. Amber, not green or red — nothing was saved and
+    /// Cooldown card: a tap that came too soon. Neutral, not a status colour — nothing was saved and
     /// nothing went wrong. The bar runs for the same window the card stays up.
     /// </summary>
     private async Task ShowHoldAsync()
@@ -287,6 +287,71 @@ public partial class KioskPage : ContentPage
             HoldCard.FadeTo(1, 220, Easing.CubicOut),
             HoldCard.ScaleTo(1, 420, Easing.SpringOut),
             HoldCard.TranslateTo(0, 0, 420, Easing.CubicOut));
+        FocusBadge();
+    }
+
+    /// <summary>
+    /// RFID dialog: the card is not linked to a Working candidate. Warning for both variants (staff must act);
+    /// the colours live in XAML tokens and only the glyph differs. Same entrance as the cooldown card with a
+    /// 10 s bar; a new tap moves the phase on and closes it.
+    /// </summary>
+    private async Task ShowRfidAsync(int motion)
+    {
+        RfidIconLabel.Text = _viewModel.IsReassign ? "!" : "+";
+
+        RfidOverlay.CancelAnimations();
+        RfidCard.CancelAnimations();
+        RfidAutoFill.CancelAnimations();
+
+        RfidOverlay.IsVisible = true;
+        RfidScrim.Opacity = 0;
+        RfidCard.Opacity = 0;
+        RfidCard.Scale = 0.94;
+        RfidCard.TranslationY = 26;
+        RfidCard.TranslationX = 0;
+        RfidNumberChip.Scale = 0.9;
+        RfidAutoFill.ScaleX = 1;
+
+        if (MotionSettings.IsLite)
+            RfidNextPersonPulse.Opacity = 0;
+        else
+            Ripple(RfidNextPersonPulse, RfidNextPersonLoop, 1800, 1.55);
+
+        _ = RfidAutoFill.ScaleXTo(0, RfidWindowMs, Easing.Linear);
+        await Task.WhenAll(
+            RfidScrim.FadeTo(0.72, 200, Easing.CubicOut),
+            RfidCard.FadeTo(1, 220, Easing.CubicOut),
+            RfidCard.ScaleTo(1, 420, Easing.SpringOut),
+            RfidCard.TranslateTo(0, 0, 420, Easing.CubicOut),
+            RfidNumberChip.ScaleTo(1, 520, Easing.SpringOut));
+        FocusBadge();
+        if (motion == _motion && _viewModel.IsReassign)
+            await ShakeAsync(RfidNumberChip);
+    }
+
+    private async Task HideRfidAsync()
+    {
+        if (!RfidOverlay.IsVisible)
+            return;
+
+        RfidAutoFill.CancelAnimations();
+        RfidNextPersonPulse.AbortAnimation(RfidNextPersonLoop);
+        RfidNextPersonPulse.Scale = 1;
+        RfidNextPersonPulse.Opacity = 0;
+        await Task.WhenAll(
+            RfidScrim.FadeTo(0, 160, Easing.CubicIn),
+            RfidCard.FadeTo(0, 160, Easing.CubicIn),
+            RfidCard.ScaleTo(0.96, 160, Easing.CubicIn));
+        // A new tap may have reopened it while this faded out.
+        if (_viewModel.Phase != KioskPhase.Unassigned)
+            RfidOverlay.IsVisible = false;
+    }
+
+    /// <summary>Staff can close the dialog early by touching outside it; the reader keeps focus.</summary>
+    private void OnRfidScrimTapped(object? sender, TappedEventArgs e)
+    {
+        if (_viewModel.Phase == KioskPhase.Unassigned)
+            _viewModel.Dismiss();
         FocusBadge();
     }
 
@@ -320,7 +385,7 @@ public partial class KioskPage : ContentPage
         {
             case KioskPhase.Reading:
                 Halo.SetMode(HaloMode.Reading);
-                await HideHoldAsync();
+                await Task.WhenAll(HideHoldAsync(), HideRfidAsync());
                 Aurora.Flash(Crimson);
                 HideBanner();
                 await Task.WhenAll(HideSuccessAsync(), HideAsync(IdentityChip));
@@ -331,7 +396,7 @@ public partial class KioskPage : ContentPage
             case KioskPhase.Capturing:
             case KioskPhase.Recognized:
                 Halo.SetMode(HaloMode.Capturing);
-                await HideHoldAsync();
+                await Task.WhenAll(HideHoldAsync(), HideRfidAsync());
                 HideBanner();
                 StartScanLine();
                 await ShowIdentityAsync();
@@ -340,18 +405,32 @@ public partial class KioskPage : ContentPage
 
             case KioskPhase.Hold:
                 Halo.SetMode(HaloMode.Capturing);
+                await HideRfidAsync();
                 HideBanner();
                 StopScanLine();
                 await ShowHoldAsync();
                 break;
 
-            case KioskPhase.Success:
-                Halo.SetMode(HaloMode.Success);
+            case KioskPhase.Unassigned:
+                // Nothing failed, so no error pulse or flash: the dialog is the only emphasis.
+                Halo.SetMode(HaloMode.Capturing);
                 await HideHoldAsync();
-                Aurora.Flash(Green);
                 HideBanner();
                 StopScanLine();
-                PaintCameraRing(Green);
+                PaintCameraRing(StatusColors.WarningSolid);
+                await Task.WhenAll(HideSuccessAsync(), HideAsync(IdentityChip));
+                if (motion != _motion)
+                    return;
+                await ShowRfidAsync(motion);
+                break;
+
+            case KioskPhase.Success:
+                Halo.SetMode(HaloMode.Success);
+                await Task.WhenAll(HideHoldAsync(), HideRfidAsync());
+                Aurora.Flash(StatusColors.SuccessSolid);
+                HideBanner();
+                StopScanLine();
+                PaintCameraRing(StatusColors.SuccessSolid);
                 await HideAsync(IdentityChip);
                 if (motion != _motion)
                     return;
@@ -360,10 +439,10 @@ public partial class KioskPage : ContentPage
 
             case KioskPhase.Unknown:
                 Halo.SetMode(HaloMode.Error);
-                await HideHoldAsync();
-                Aurora.Flash(Alarm);
+                await Task.WhenAll(HideHoldAsync(), HideRfidAsync());
+                Aurora.Flash(StatusColors.ErrorSolid);
                 StopScanLine();
-                PaintCameraRing(Alarm);
+                PaintCameraRing(StatusColors.ErrorSolid);
                 await Task.WhenAll(HideSuccessAsync(), HideAsync(IdentityChip));
                 if (motion != _motion)
                     return;
@@ -373,7 +452,7 @@ public partial class KioskPage : ContentPage
 
             default:
                 Halo.SetMode(HaloMode.Idle);
-                await HideHoldAsync();
+                await Task.WhenAll(HideHoldAsync(), HideRfidAsync());
                 HideBanner();
                 StopScanLine();
                 PaintCameraRing(null);
@@ -806,27 +885,30 @@ public partial class KioskPage : ContentPage
 
     private void PaintPhase(KioskPhase phase, KioskPhase previous = KioskPhase.Idle)
     {
-        var (text, color) = phase switch
+        // Brand red is the flow (ready, reading, capturing); status colours only for outcomes.
+        // Solid chips carry their OnSolid text; the warning chip is a soft tint with WarningText.
+        var (text, fill, stroke, ink) = phase switch
         {
-            KioskPhase.Reading => ("Reading badge", Crimson),
-            KioskPhase.Capturing or KioskPhase.Recognized => ("Capturing photo", Crimson),
-            KioskPhase.Hold => ("Please wait", Color.FromArgb("#3B4A5C")),
-            KioskPhase.Success => ("Punch saved", Green),
-            KioskPhase.Unknown => ("Needs attention", Alarm),
-            _ => ("Ready", Crimson),
+            KioskPhase.Reading => ("Reading badge", Crimson, Crimson, Colors.White),
+            KioskPhase.Capturing or KioskPhase.Recognized => ("Capturing photo", Crimson, Crimson, Colors.White),
+            KioskPhase.Hold => ("Please wait", StatusColors.NeutralSolid, StatusColors.NeutralSolid, StatusColors.NeutralOnSolid),
+            KioskPhase.Success => ("Punch saved", StatusColors.SuccessSolid, StatusColors.SuccessSolid, StatusColors.SuccessOnSolid),
+            KioskPhase.Unknown => ("Needs attention", StatusColors.ErrorSolid, StatusColors.ErrorSolid, StatusColors.ErrorOnSolid),
+            KioskPhase.Unassigned => (_viewModel.IsReassign ? "Reassign card" : "Card not assigned",
+                StatusColors.WarningSoft, StatusColors.WarningBorder, StatusColors.WarningText),
+            _ => ("Ready", Crimson, Crimson, Colors.White),
         };
-        // Solid fill with white text: red text on a faint red tint is unreadable on the kiosk screen.
         PhaseLabel.Text = text;
-        PhaseLabel.TextColor = Colors.White;
-        PhaseDot.BackgroundColor = Colors.White;
-        PhaseChip.BackgroundColor = color;
-        PhaseChip.Stroke = color;
+        PhaseLabel.TextColor = ink;
+        PhaseDot.BackgroundColor = ink;
+        PhaseChip.BackgroundColor = fill;
+        PhaseChip.Stroke = stroke;
         PhaseDot.AbortAnimation("phase-dot");
         PhaseDot.Opacity = 1;
         if (phase is KioskPhase.Idle or KioskPhase.Reading or KioskPhase.Capturing or KioskPhase.Recognized or KioskPhase.Hold)
             LoopPulse(PhaseDot, "phase-dot", phase == KioskPhase.Idle ? 1600u : 600u, 1, 0.25);
 
-        // Which step is active, and where a failure happened.
+        // Which step is active, where a failure happened (error), and where the flow stopped for staff (warning).
         var active = phase switch
         {
             KioskPhase.Reading => 1,
@@ -837,36 +919,43 @@ public partial class KioskPage : ContentPage
         var failed = phase == KioskPhase.Unknown
             ? previous is KioskPhase.Capturing or KioskPhase.Recognized ? 2 : 1
             : -1;
-        if (failed >= 0)
-            active = failed;
+        var warned = phase == KioskPhase.Unassigned ? 1 : -1;
+        var stopped = Math.Max(failed, warned);
+        if (stopped >= 0)
+            active = stopped;
 
+        var faint = Resource("Faint", Colors.Gray);
+        var line = Resource("Line", Colors.Gray);
         for (var i = 0; i < _steps.Count; i++)
         {
             var (pill, dot, label) = _steps[i];
             dot.AbortAnimation("step");
             dot.Opacity = 1;
-            Color ink;
+            Color stepFill;
+            Color stepInk;
             if (i == failed)
-                ink = Alarm;
+                (stepFill, stepInk) = (StatusColors.ErrorSolid, StatusColors.ErrorOnSolid);
+            else if (i == warned)
+                (stepFill, stepInk) = (StatusColors.WarningSolid, StatusColors.WarningOnSolid);
             else if (i < active)
-                ink = Green;
+                (stepFill, stepInk) = (StatusColors.SuccessSolid, StatusColors.SuccessOnSolid);
             else if (i == active)
-                ink = Crimson;
+                (stepFill, stepInk) = (Crimson, Colors.White);
             else
-                ink = Resource("Faint", Colors.Gray);
+                (stepFill, stepInk) = (faint, faint);
 
-            var lit = i <= active || i == failed;
-            pill.BackgroundColor = lit ? ink : Colors.Transparent;
-            pill.Stroke = lit ? ink : Resource("Line", Colors.Gray);
-            dot.BackgroundColor = lit ? Colors.White : ink;
-            label.TextColor = lit ? Colors.White : Resource("Faint", Colors.Gray);
-            if (i == active && i != failed && phase != KioskPhase.Success)
+            var lit = i <= active;
+            pill.BackgroundColor = lit ? stepFill : Colors.Transparent;
+            pill.Stroke = lit ? stepFill : line;
+            dot.BackgroundColor = lit ? stepInk : faint;
+            label.TextColor = lit ? stepInk : faint;
+            if (i == active && stopped < 0 && phase != KioskPhase.Success)
                 LoopPulse(dot, "step", 700, 1, 0.2);
 
             if (i > 0)
             {
                 var link = _links[i - 1];
-                link.Color = i <= active && failed < 0 || i < failed ? Green : Resource("Line", Colors.Gray);
+                link.Color = i <= active && stopped < 0 || i < stopped ? StatusColors.SuccessSolid : line;
             }
         }
 
@@ -896,8 +985,8 @@ public partial class KioskPage : ContentPage
     {
         var color = _viewModel.Server switch
         {
-            ServerLink.Online => Green,
-            ServerLink.Offline => Alarm,
+            ServerLink.Online => StatusColors.SuccessSolid,
+            ServerLink.Offline => StatusColors.ErrorSolid,
             _ => Slate,
         };
         ServerDot.BackgroundColor = color;
@@ -923,7 +1012,7 @@ public partial class KioskPage : ContentPage
         CameraFallback.Text = ClockCamera.StatusText;
         CameraFallback.IsVisible = !live;
         CameraChipLabel.Text = ClockCamera.StatusText;
-        CameraDot.BackgroundColor = live ? Green : Slate;
+        CameraDot.BackgroundColor = live ? StatusColors.SuccessSolid : Slate;
     }
 
     // ------------------------------------------------------------------ Live activity
@@ -973,6 +1062,10 @@ public partial class KioskPage : ContentPage
         if (e.Parameter is string choice)
             AppearanceSettings.Set(choice);
         PaintTheme(animate: true);
+        // Status colours painted in code read the refreshed tokens.
+        PaintPhase(_viewModel.Phase);
+        PaintServer();
+        PaintCamera();
         BadgeEntrySetup.ClaimSoon();
     }
 
@@ -982,6 +1075,8 @@ public partial class KioskPage : ContentPage
         Halo.RefreshTheme();
         PaintTheme(animate: false);
         PaintPhase(_viewModel.Phase);
+        PaintServer();
+        PaintCamera();
     }
 
     private void PaintTheme(bool animate)

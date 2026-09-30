@@ -78,6 +78,22 @@ public sealed class ClockKioskHttpTests : IDisposable
     }
 
     [Fact]
+    public async Task Badge_of_a_candidate_not_working_throws_with_the_rfid_to_reassign()
+    {
+        _handler.On("GET", "/api/clock-kiosk/badges/04A1C8E291", HttpStatusCode.Conflict, """
+            {"error":"Not working.","reason":"not_working","rfid":"04A1C8E291","candidate_name":"Maya Chen","status":"Inactive"}
+            """);
+        var directory = new HttpCandidateBadgeDirectory(Api(), _shifts, Store());
+
+        var ex = await Assert.ThrowsAsync<BadgeNotWorkingException>(() => directory.FindByRfidAsync("04A1C8E291"));
+
+        Assert.Equal("04A1C8E291", ex.Rfid);
+        Assert.Equal("Maya Chen", ex.CandidateName);
+        Assert.Equal("Inactive", ex.Status);
+        Assert.Null(_shifts.GetOpenClockIn(1042));
+    }
+
+    [Fact]
     public async Task Clock_in_posts_rfid_and_image_path_then_refreshes_sessions()
     {
         _handler.On("POST", "/api/clock-kiosk/clock-in", HttpStatusCode.OK, """

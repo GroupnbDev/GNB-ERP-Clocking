@@ -2,7 +2,9 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
 
-    <!-- Palette taken from https://groupnb.ca/ only: Kadence globals, the brand reds and the site green. No orange. -->
+    <!-- Brand palette from https://groupnb.ca/: Kadence globals and the brand reds. Brand and Highlight are identity only
+         (logo, avatars, ID tiles, ready ring). Status colours below are separate so an error never looks like the logo;
+         amber is a Warning status colour only, never branding. -->
     <!-- Surfaces are translucent so the animated aurora shows through the glass panels.
          AppearanceSettings.RefreshColors swaps these for the active theme. -->
     <Color x:Key="Canvas">#F7FAFC</Color>
@@ -14,8 +16,27 @@
     <Color x:Key="Line">#1A1A202C</Color>
     <Color x:Key="Brand">#AB1100</Color>
     <Color x:Key="Highlight">#C70000</Color>
-    <Color x:Key="Danger">#C70000</Color>
-    <Color x:Key="DangerSoft">#C70000</Color>
-    <Color x:Key="Success">#28A745</Color>
+
+    <!-- Status palette. Solid = fills, OnSolid = text on Solid, Soft = tinted surface, Border = edge on Soft,
+         Text = status-coloured text on Canvas/Soft. Status text never uses Solid or Border.
+         AppearanceSettings.RefreshColors swaps these for the dark theme. -->
+    <Color x:Key="LineStrong">#331A202C</Color>
+    <Color x:Key="SuccessSolid">#15803D</Color>
+    <Color x:Key="SuccessOnSolid">#FFFFFF</Color>
+    <Color x:Key="SuccessText">#166534</Color>
+    <Color x:Key="WarningSolid">#F59E0B</Color>
+    <Color x:Key="WarningOnSolid">#1A202C</Color>
+    <Color x:Key="WarningSoft">#FFFBEB</Color>
+    <Color x:Key="WarningBorder">#FCD34D</Color>
+    <Color x:Key="WarningText">#B45309</Color>
+    <Color x:Key="ErrorSolid">#DC2626</Color>
+    <Color x:Key="ErrorOnSolid">#FFFFFF</Color>
+    <Color x:Key="ErrorSoft">#FEF2F2</Color>
+    <Color x:Key="ErrorBorder">#FCA5A5</Color>
+    <Color x:Key="ErrorText">#B91C1C</Color>
+    <Color x:Key="NeutralSolid">#475569</Color>
+    <Color x:Key="NeutralOnSolid">#FFFFFF</Color>
+    <Color x:Key="NeutralSoft">#F1F5F9</Color>
+    <Color x:Key="NeutralBorder">#CBD5E1</Color>
 
 </ResourceDictionary>
