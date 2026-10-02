@@ -159,6 +159,15 @@ public sealed class OfflineClockStore : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
+    public async Task<List<QueuedPunch>> TakeDuplicateOlderThanAsync(DateTimeOffset cutoff)
+    {
+        var db = await ConnectionAsync().ConfigureAwait(false);
+        return await db.Table<QueuedPunch>()
+            .Where(p => p.State == QueuedPunchStates.Duplicate && p.CapturedAt < cutoff)
+            .ToListAsync()
+            .ConfigureAwait(false);
+    }
+
     public async Task DeleteAsync(QueuedPunch punch)
     {
         var db = await ConnectionAsync().ConfigureAwait(false);

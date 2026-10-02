@@ -10,6 +10,8 @@ namespace Gnb.Clocking.App.Platforms.Windows;
 // Entry (a TextBox) has focus and would otherwise swallow the key.
 public static class FullScreenToggle
 {
+    public static event Action? ResetCameraRequested;
+
     public static void Attach(Microsoft.UI.Xaml.Window window)
     {
         if (window.Content is UIElement content)
@@ -37,6 +39,13 @@ public static class FullScreenToggle
     {
         root.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler((_, args) =>
         {
+            if (args.Key == VirtualKey.F5)
+            {
+                ResetCameraRequested?.Invoke();
+                args.Handled = true;
+                return;
+            }
+
             if (args.Key != VirtualKey.F11)
             {
                 return;

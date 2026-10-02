@@ -359,6 +359,24 @@ public sealed class OfflineSyncTests : IAsyncDisposable
         Assert.InRange(await store.GetClockSkewSecondsAsync(), 25, 35);
     }
 
+    [Fact]
+    public async Task Drain_drops_duplicate_punches_older_than_retention()
+    {
+        var store = Store();
+        var old = Punch("old-dup", at: DateTimeOffset.Now - TimeSpan.FromDays(4));
+        var recent = Punch("new-dup", at: DateTimeOffset.Now - TimeSpan.FromHours(1));
+        await store.EnqueueAsync(old);
+        await store.EnqueueAsync(recent);
+        await store.MarkDuplicateAsync(old, "Already clocked out");
+        await store.MarkDuplicateAsync(recent, "Already clocked out");
+
+        await new ClockSyncWorker(Api(), store).DrainAsync();
+
+        List<QueuedPunch> left = await store.TakeDuplicateOlderThanAsync(DateTimeOffset.Now.AddDays(1));
+        Assert.Single(left);
+        Assert.Equal("new-dup", left[0].ClientPunchId);
+    }
+
     private sealed class FakeHandler : HttpMessageHandler
     {
         private readonly Dictionary<string, (HttpStatusCode Status, string Body)> _routes = new();

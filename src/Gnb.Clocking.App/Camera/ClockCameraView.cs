@@ -1,3 +1,5 @@
+using Gnb.Clocking.Application.Clocking;
+
 namespace Gnb.Clocking.App.Camera;
 
 public class ClockCameraView : View
@@ -33,5 +35,13 @@ public class ClockCameraView : View
 
 public interface IClockCameraHandler
 {
+    CameraHealth Health { get; }
+
+    event Action<CameraHealth>? HealthChanged;
+
     Task<byte[]?> CaptureJpegAsync(CancellationToken cancellationToken);
+
+    void ReportFailure(Exception error);
+
+    Task RebuildAsync(string trigger);
 }

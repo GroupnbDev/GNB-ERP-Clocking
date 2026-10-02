@@ -58,4 +58,17 @@ public sealed class LocalPhotoPrunerTests : IDisposable
         Assert.Equal(0, LocalPhotoPruner.Prune(_root, keepDays: 0, today: DateTime.Today));
         Assert.True(File.Exists(photo));
     }
+
+    [Fact]
+    public void Removes_thumbnails_with_the_day_folder()
+    {
+        var old = Photo(1042, "2026-09-01");
+        var thumb = Path.Combine(Path.GetDirectoryName(old)!, "ClockIN.thumb.jpeg");
+        File.WriteAllBytes(thumb, new byte[] { 0xFF, 0xD8, 0xFF });
+
+        LocalPhotoPruner.Prune(_root, keepDays: 14, today: new DateTime(2026, 9, 22));
+
+        Assert.False(File.Exists(old));
+        Assert.False(File.Exists(thumb));
+    }
 }

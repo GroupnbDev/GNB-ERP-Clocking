@@ -40,6 +40,7 @@ public sealed class FileClockPhotoStore : IClockPhotoStore
             Directory.CreateDirectory(folder);
 
         await File.WriteAllBytesAsync(absolute, jpeg.ToArray(), cancellationToken).ConfigureAwait(false);
+        ClockPhotoThumbnail.TryWrite(absolute);
         return new ClockPhoto(relative, absolute);
     }
 }

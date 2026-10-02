@@ -232,6 +232,28 @@ public sealed class ClockKioskHttpTests : IDisposable
     }
 
     [Fact]
+    public async Task Photo_store_moves_the_thumbnail_with_the_photo()
+    {
+        _handler.On("POST", "/api/clock-kiosk/photos", HttpStatusCode.OK,
+            """{"relative_path":"Records/2026-09-21/ClockOut.jpeg","file_name":"ClockOut.jpeg"}""");
+        var previous = ClockPhotoThumbnail.Write;
+        ClockPhotoThumbnail.Write = photo => File.WriteAllBytes(ClockPhotoThumbnail.PathFor(photo), new byte[] { 0xFF, 0xD8 });
+        try
+        {
+            var store = new HttpClockPhotoStore(new FileClockPhotoStore(_root), Api(), Options());
+
+            var photo = await store.SaveJpegAsync(Maya, isClockOut: true, new DateTime(2026, 9, 22), new byte[] { 0xFF, 0xD8, 0xFF });
+
+            Assert.True(File.Exists(ClockPhotoThumbnail.PathFor(photo.AbsolutePath)));
+            Assert.False(File.Exists(Path.Combine(_root, "Candidates", "1042", "Records", "2026-09-22", "ClockOut.thumb.jpeg")));
+        }
+        finally
+        {
+            ClockPhotoThumbnail.Write = previous;
+        }
+    }
+
+    [Fact]
     public async Task File_store_saves_clock_in_jpeg_under_the_candidate_record_day()
     {
         var photo = await new FileClockPhotoStore(_root).SaveJpegAsync(Maya, false, new DateTime(2026, 9, 22), new byte[] { 1, 2, 3 });

@@ -1,3 +1,4 @@
+using Gnb.Clocking.App.Diagnostics;
 using Gnb.Clocking.Infrastructure.Photos;
 using Microsoft.Extensions.Configuration;
 
@@ -9,24 +10,32 @@ namespace Gnb.Clocking.App.Configuration;
 /// </summary>
 public static class PhotoHousekeeping
 {
-    public static void Start(IConfiguration configuration, string photoRoot)
+    public static void Start(IConfiguration configuration, string photoRoot, string logDirectory, int logRetentionDays)
     {
         var keepDays = int.TryParse(configuration["ClockKiosk:KeepLocalPhotosDays"], out var days)
             ? days
             : LocalPhotoPruner.DefaultKeepDays;
-        if (keepDays < 1)
-            return;
 
         _ = Task.Run(async () =>
         {
-            // Let the window, camera and first sync settle before touching the disk.
+            try
+            {
+                FileLoggerProvider.Prune(logDirectory, logRetentionDays, DateTime.Today);
+            }
+            catch (Exception)
+            {
+            }
+
+            // Let the window, camera and first sync settle before touching the photo disk.
             await Task.Delay(TimeSpan.FromMinutes(1)).ConfigureAwait(false);
             using var daily = new PeriodicTimer(TimeSpan.FromHours(24));
             do
             {
                 try
                 {
-                    LocalPhotoPruner.Prune(photoRoot, keepDays, DateTime.Today);
+                    if (keepDays >= 1)
+                        LocalPhotoPruner.Prune(photoRoot, keepDays, DateTime.Today);
+                    FileLoggerProvider.Prune(logDirectory, logRetentionDays, DateTime.Today);
                 }
                 catch (Exception)
                 {

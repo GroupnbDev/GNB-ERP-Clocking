@@ -1,4 +1,5 @@
 using Gnb.Clocking.Domain.Clocking;
+using Gnb.Clocking.Application.Clocking;
 using Gnb.Clocking.App.Theming;
 using Microsoft.Maui.Graphics;
 
@@ -35,9 +36,16 @@ public sealed class PunchRow
 
         // Clock in and out are normal events: brand for in, neutral slate for out. Never a status colour.
         var accent = arrived ? StatusColors.Brand : Color.FromArgb("#475569");
+        var thumb = string.IsNullOrWhiteSpace(clockEvent.PhotoAbsolutePath)
+            ? null
+            : ClockPhotoThumbnail.PathFor(clockEvent.PhotoAbsolutePath);
+        var hasThumb = thumb != null && File.Exists(thumb);
         return new PunchRow
         {
-            Key = $"{clockEvent.CandidateId}|{clockEvent.Action}|{clockEvent.At.UtcTicks}",
+            // Minute, not ticks: a queued punch and the server's copy of it after sync land on the same
+            // key, so the list keeps the row instead of rebuilding. The cooldown rules out two same-action
+            // punches for one person inside a minute.
+            Key = $"{clockEvent.CandidateId}|{clockEvent.Action}|{clockEvent.At.UtcDateTime:yyyyMMddHHmm}",
             ShowPendingNote = clockEvent.PendingSync && !clockEvent.NeedsAttention,
             ShowAttentionNote = clockEvent.NeedsAttention,
             Initials = clockEvent.Initials,
@@ -48,9 +56,9 @@ public sealed class PunchRow
             Time = clockEvent.At.ToLocalTime().ToString("h:mm tt"),
             Detail = detail,
             Accent = accent,
-            PhotoPath = clockEvent.PhotoAbsolutePath,
-            HasPhoto = !string.IsNullOrWhiteSpace(clockEvent.PhotoAbsolutePath),
-            ShowInitials = string.IsNullOrWhiteSpace(clockEvent.PhotoAbsolutePath)
+            PhotoPath = hasThumb ? thumb : null,
+            HasPhoto = hasThumb,
+            ShowInitials = !hasThumb
         };
     }
 }

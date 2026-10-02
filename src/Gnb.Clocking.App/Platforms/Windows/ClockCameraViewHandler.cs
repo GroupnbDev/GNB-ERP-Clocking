@@ -1,193 +1,601 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Gnb.Clocking.App.Camera;
+using Gnb.Clocking.App.Configuration;
+using Gnb.Clocking.App.Diagnostics;
 using Gnb.Clocking.Application.Clocking;
+using Microsoft.Extensions.Logging;
 using Microsoft.Maui.Handlers;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.Foundation;
+using Windows.Graphics.Imaging;
 using Windows.Media.Capture;
 using Windows.Media.Capture.Frames;
 using Windows.Media.Core;
+using Windows.Media.Devices;
 using Windows.Media.MediaProperties;
 using Windows.Media.Playback;
 using Windows.Storage.Streams;
-using WinPreviewElement = Microsoft.UI.Xaml.Controls.MediaPlayerElement;
+using Stretch = Microsoft.UI.Xaml.Media.Stretch;
+using Visibility = Microsoft.UI.Xaml.Visibility;
+using WinGrid = Microsoft.UI.Xaml.Controls.Grid;
 
 namespace Gnb.Clocking.App.Platforms.Windows;
 
-// WinUI 3 never got the classic UWP CaptureElement control (tracked upstream at
-// microsoft/microsoft-ui-xaml#8214), so the camera preview is rendered through a
-// MediaPlayerElement bound to a MediaFrameSource instead, per Microsoft's own guidance:
-// https://learn.microsoft.com/windows/apps/develop/camera/camera-quickstart-winui3
-public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinPreviewElement>, IClockCameraHandler
+// WinUI 3 never got CaptureElement. The preview is a MediaPlayerElement on the color frame source
+// when the webcam allows a reader and a player to share it, otherwise the reader's frames painted
+// onto an Image. The photo always comes from the newest reader frame, never a frozen player picture.
+public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid>, IClockCameraHandler
 {
     public static IPropertyMapper<ClockCameraView, WinClockCameraHandler> PropertyMapper =
         new PropertyMapper<ClockCameraView, WinClockCameraHandler>(ViewMapper);
 
-    private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    /// <summary>
-    /// Preview and photo size cap. A 1080p+ webcam stream costs an older i3 with integrated graphics a
-    /// large share of its CPU just to decode and scale into a small circle; 720p is plenty for the circle
-    /// and for an identity photo, and keeps each saved JPEG around 100–200 KB.
-    /// </summary>
-    private const uint MaxHeight = 720;
+    private const uint MaxHeight = 480;
+    private const uint PhotoMaxEdge = 640;
+    private const double JpegQuality = 0.5;
     private const double MaxFrameRate = 30;
+    private static readonly TimeSpan PreviewInterval = TimeSpan.FromSeconds(1.0 / 15);
 
-    private MediaCapture? _media;
-    private MediaPlayer? _mediaPlayer;
-    private VideoEncodingProperties? _previewFormat;
+    private readonly ILogger<WinClockCameraHandler> _logger = KioskLog.Create<WinClockCameraHandler>();
+    private readonly SemaphoreSlim _session = new(1, 1);
+    private readonly object _rebuildGate = new();
+    private readonly object _bitmapGate = new();
+
+    private MediaPlayerElement? _playerView;
+    private Microsoft.UI.Xaml.Controls.Image? _frameView;
+    private CameraSession? _current;
+    private SoftwareBitmap? _latestBitmap;
+    private long _lastFrameAt;
+    private long _lastPreviewAt;
+    private long _lastCopyAt;
+    private int _retryPending;
+    private SoftwareBitmapSource? _shownPreview;
+    private long _sessionStartedAt;
+    private int _startAttempt;
+    private int _closed;
+    private Task? _rebuild;
+    private DispatcherQueueTimer? _watchdog;
+    private CameraStreamState _streamState = CameraStreamState.Streaming;
+    private long _leftStreamingAt;
+    private CameraHealth _health = CameraHealth.Starting;
     private string? _error;
-    private int _recycling;
 
     public WinClockCameraHandler() : base(PropertyMapper)
     {
     }
 
-    protected override WinPreviewElement CreatePlatformView() => new()
-    {
-        Stretch = Microsoft.UI.Xaml.Media.Stretch.UniformToFill,
-        AreTransportControlsEnabled = false
-    };
+    public CameraHealth Health => _health;
 
-    protected override void ConnectHandler(WinPreviewElement platformView)
+    public event Action<CameraHealth>? HealthChanged;
+
+    protected override WinGrid CreatePlatformView()
     {
-        base.ConnectHandler(platformView);
-        _ = StartAsync(platformView);
+        _playerView = new MediaPlayerElement
+        {
+            Stretch = Stretch.UniformToFill,
+            AreTransportControlsEnabled = false,
+            IsTabStop = false
+        };
+        _frameView = new Microsoft.UI.Xaml.Controls.Image
+        {
+            Stretch = Stretch.UniformToFill,
+            IsTabStop = false,
+            Visibility = Visibility.Collapsed
+        };
+        var grid = new WinGrid();
+        grid.Children.Add(_playerView);
+        grid.Children.Add(_frameView);
+        return grid;
     }
 
-    protected override void DisconnectHandler(WinPreviewElement platformView)
+    protected override void ConnectHandler(WinGrid platformView)
     {
-        ReleasePreview();
+        base.ConnectHandler(platformView);
+        var queue = platformView.DispatcherQueue;
+        _watchdog = queue.CreateTimer();
+        _watchdog.Interval = TimeSpan.FromSeconds(1);
+        _watchdog.Tick += (_, _) => OnWatchdog();
+        _watchdog.Start();
+        CameraPowerSignals.Attach(RebuildAsync, () => Health);
+        _ = RebuildAsync("start");
+    }
+
+    protected override void DisconnectHandler(WinGrid platformView)
+    {
+        _closed = 1;
+        _watchdog?.Stop();
+        _ = DisposeSessionAsync();
         base.DisconnectHandler(platformView);
     }
 
-    /// <summary>
-    /// A preview left running for days stops delivering frames, and the photo grab then never returns.
-    /// Drop the pipeline and open it again so the next tap is not stuck on the scan line.
-    /// </summary>
-    private void RecycleSoon()
+    public void ReportFailure(Exception error)
     {
-        DispatcherQueue? queue = PlatformView?.DispatcherQueue;
-        if (queue == null)
-        {
-            _ = RecycleAsync();
-            return;
-        }
-
-        queue.TryEnqueue(() => _ = RecycleAsync());
+        _logger.LogError(error, "Camera capture error");
+        _ = RebuildAsync("capture-error");
     }
 
-    private async Task RecycleAsync()
+    public Task RebuildAsync(string trigger)
     {
-        if (Interlocked.Exchange(ref _recycling, 1) == 1)
-            return;
-
-        try
+        lock (_rebuildGate)
         {
-            WinPreviewElement? view = PlatformView;
-            ReleasePreview();
-            if (view == null)
-                return;
+            if (_rebuild is { IsCompleted: false })
+                return _rebuild;
 
-            // The in-flight photo grab still holds the camera. Opening it again immediately fails,
-            // and the preview then stays dead until the exe is restarted.
-            await Task.Delay(500).ConfigureAwait(true);
-            await StartAsync(view).ConfigureAwait(true);
-            if (_media == null)
-            {
-                await Task.Delay(1000).ConfigureAwait(true);
-                await StartAsync(view).ConfigureAwait(true);
-            }
+            var task = RebuildCoreAsync(trigger);
+            _rebuild = task;
+            return task;
         }
-        finally
-        {
-            _recycling = 0;
-        }
-    }
-
-    private void ReleasePreview()
-    {
-        if (_mediaPlayer != null)
-        {
-            _mediaPlayer.Pause();
-            _mediaPlayer.Dispose();
-            _mediaPlayer = null;
-        }
-
-        _media?.Dispose();
-        _media = null;
     }
 
     public async Task<byte[]?> CaptureJpegAsync(CancellationToken cancellationToken)
     {
-        await _ready.Task.WaitAsync(cancellationToken).ConfigureAwait(true);
-        if (_media == null)
-            throw new ClockingException(_error ?? "The camera is not ready.");
+        if (Health != CameraHealth.Live)
+            throw new ClockingException("The camera is reconnecting. Hold the badge to the reader again in a few seconds.");
 
-        var encoding = ImageEncodingProperties.CreateJpeg();
-        if (_previewFormat is { Width: > 0, Height: > 0 })
+        var age = FrameAgeMs();
+        if (age > CameraSettingsAccess.MaxPhotoAgeMs)
         {
-            // Same frame size as the preview: no full-sensor capture, no extra resize work.
-            encoding.Width = _previewFormat.Width;
-            encoding.Height = _previewFormat.Height;
+            _logger.LogWarning("Camera frame is {AgeMs} ms old; rebuilding", age);
+            _ = RebuildAsync("capture-error");
+            throw new ClockingException("The camera is reconnecting. Hold the badge to the reader again in a few seconds.");
         }
 
-        using var stream = new InMemoryRandomAccessStream();
-        using var abandoned = cancellationToken.Register(RecycleSoon);
+        await _session.WaitAsync(cancellationToken).ConfigureAwait(true);
         try
         {
-            await _media.CapturePhotoToStreamAsync(encoding, stream).AsTask(cancellationToken).ConfigureAwait(true);
+            if (Health != CameraHealth.Live)
+                throw new ClockingException("The camera is reconnecting. Hold the badge to the reader again in a few seconds.");
+
+            var encoded = await EncodeLatestAsync(cancellationToken).ConfigureAwait(true);
+            if (encoded is { Length: > 0 })
+                return encoded;
+
+            if (_current?.Capture is MediaCapture fallback)
+                return await CapturePhotoFallbackAsync(fallback, cancellationToken).ConfigureAwait(true);
+
+            throw new ClockingException("The camera is reconnecting. Hold the badge to the reader again in a few seconds.");
         }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        finally
         {
-            throw new OperationCanceledException(cancellationToken);
+            _session.Release();
         }
-        stream.Seek(0);
-        var size = (uint)stream.Size;
-        using var reader = new DataReader(stream.GetInputStreamAt(0));
-        await reader.LoadAsync(size).AsTask(cancellationToken).ConfigureAwait(true);
-        var bytes = new byte[size];
-        reader.ReadBytes(bytes);
-        return bytes;
     }
 
-    private async Task StartAsync(WinPreviewElement view)
+    private async Task RebuildCoreAsync(string trigger)
     {
+        if (_closed == 1)
+            return;
+
+        var started = Stopwatch.GetTimestamp();
+        await _session.WaitAsync().ConfigureAwait(true);
         try
         {
-            var media = new MediaCapture();
-            await media.InitializeAsync(new MediaCaptureInitializationSettings
+            SetHealth(trigger == "start" ? CameraHealth.Starting : CameraHealth.Recovering, null);
+            _logger.LogInformation("Camera rebuild trigger {Trigger}", trigger);
+            await DisposeSessionAsync().ConfigureAwait(true);
+            var opened = await StartSessionAsync().ConfigureAwait(true);
+            var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            if (opened)
             {
-                StreamingCaptureMode = StreamingCaptureMode.Video
-            }).AsTask().ConfigureAwait(true);
-
-            _previewFormat = await UseLightPreviewAsync(media).ConfigureAwait(true);
-
-            var frameSource = FindColorFrameSource(media)
-                ?? throw new ClockingException("No video preview or record stream found.");
-
-            var player = new MediaPlayer
+                _logger.LogInformation("Camera rebuild finished trigger {Trigger} elapsed {ElapsedMs} outcome ok", trigger, (long)elapsed);
+            }
+            else
             {
-                RealTimePlayback = true,
-                AutoPlay = false,
-                Source = MediaSource.CreateFromMediaFrameSource(frameSource)
-            };
-            view.SetMediaPlayer(player);
-            player.Play();
-
-            _mediaPlayer = player;
-            _media = media;
-            _ready.TrySetResult();
-            VirtualView.SetStatus("Camera live");
-        }
-        catch (UnauthorizedAccessException)
-        {
-            Fail("Allow camera access to save clock photos.");
+                _logger.LogWarning("Camera rebuild finished trigger {Trigger} elapsed {ElapsedMs} outcome failed", trigger, (long)elapsed);
+                ScheduleRetry();
+            }
         }
         catch (Exception ex)
         {
-            Fail(ex.Message);
+            _logger.LogError(ex, "Camera rebuild trigger {Trigger} threw", trigger);
+            SetHealth(CameraHealth.Unavailable, "Camera unavailable — retrying");
+            ScheduleRetry();
+        }
+        finally
+        {
+            _session.Release();
         }
     }
 
-    /// <summary>Prefers the dedicated preview stream some drivers expose; falls back to the record stream.</summary>
+    private void ScheduleRetry()
+    {
+        if (_closed == 1 || Interlocked.Exchange(ref _retryPending, 1) == 1)
+            return;
+
+        var attempt = ++_startAttempt;
+        var delay = CameraRecoveryPolicy.NextDelay(attempt);
+        _logger.LogInformation("Camera retry {Attempt} in {DelaySeconds}s", attempt, delay.TotalSeconds);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(delay).ConfigureAwait(false);
+                Interlocked.Exchange(ref _retryPending, 0);
+                if (_closed == 0)
+                    await RebuildAsync("failed").ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Exchange(ref _retryPending, 0);
+                _logger.LogError(ex, "Camera retry scheduling failed");
+            }
+        });
+    }
+
+    private async Task<bool> StartSessionAsync()
+    {
+        var view = _playerView;
+        if (view == null)
+            return false;
+
+        var media = new MediaCapture();
+        MediaFrameReader? reader = null;
+        try
+        {
+            await media.InitializeAsync(new MediaCaptureInitializationSettings
+            {
+                StreamingCaptureMode = StreamingCaptureMode.Video,
+                MemoryPreference = MediaCaptureMemoryPreference.Cpu
+            }).AsTask().ConfigureAwait(true);
+
+            var format = await UseLightPreviewAsync(media).ConfigureAwait(true);
+            if (format != null)
+                _logger.LogInformation("Camera preview format {Width}x{Height}", format.Width, format.Height);
+
+            var source = FindColorFrameSource(media)
+                ?? throw new ClockingException("No video preview or record stream found.");
+
+            reader = await media.CreateFrameReaderAsync(source, MediaEncodingSubtypes.Bgra8).AsTask().ConfigureAwait(true);
+            reader.AcquisitionMode = MediaFrameReaderAcquisitionMode.Realtime;
+            reader.FrameArrived += OnFrameArrived;
+            var readerStatus = await reader.StartAsync().AsTask().ConfigureAwait(true);
+            if (readerStatus != MediaFrameReaderStartStatus.Success)
+                throw new ClockingException($"The camera frame reader did not start ({readerStatus}).");
+
+            MediaPlayer? player = null;
+            MediaSource? mediaSource = null;
+            var shared = false;
+            try
+            {
+                mediaSource = MediaSource.CreateFromMediaFrameSource(source);
+                player = new MediaPlayer
+                {
+                    RealTimePlayback = true,
+                    AutoPlay = false,
+                    Source = mediaSource
+                };
+                view.SetMediaPlayer(player);
+                player.Play();
+                if (_frameView != null)
+                    _frameView.Visibility = Visibility.Collapsed;
+                shared = true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Camera frame reader and preview cannot share a source; painting frames instead");
+                player?.Dispose();
+                mediaSource?.Dispose();
+                player = null;
+                mediaSource = null;
+                view.SetMediaPlayer(null);
+                if (_frameView != null)
+                    _frameView.Visibility = Visibility.Visible;
+            }
+
+            media.Failed += OnMediaFailed;
+            media.CameraStreamStateChanged += OnStreamStateChanged;
+            _streamState = CameraStreamState.Streaming;
+            _leftStreamingAt = 0;
+            _lastFrameAt = 0;
+            _sessionStartedAt = Stopwatch.GetTimestamp();
+            _current = new CameraSession(media, source, mediaSource, player, reader, view);
+            _logger.LogInformation("Camera frame reader sharing {Mode}", shared ? "shared" : "preview-from-reader");
+            return true;
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogError(ex, "Camera permission denied");
+            ReleaseFailedStart(media, reader);
+            SetHealth(CameraHealth.Unavailable, "Allow camera access to save clock photos.");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Camera start failed");
+            ReleaseFailedStart(media, reader);
+
+            SetHealth(CameraHealth.Unavailable, "Camera unavailable — retrying");
+            return false;
+        }
+    }
+
+    private void ReleaseFailedStart(MediaCapture media, MediaFrameReader? reader)
+    {
+        try
+        {
+            if (reader != null)
+            {
+                reader.FrameArrived -= OnFrameArrived;
+                reader.Dispose();
+            }
+
+            media.Failed -= OnMediaFailed;
+            media.CameraStreamStateChanged -= OnStreamStateChanged;
+            media.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Camera dispose after a failed start threw");
+        }
+    }
+
+    private void OnMediaFailed(MediaCapture sender, MediaCaptureFailedEventArgs args)
+    {
+        // A session being torn down reports its own shutdown; only the live one counts.
+        if (!ReferenceEquals(sender, _current?.Capture))
+            return;
+
+        _logger.LogError("MediaCapture failed {Code} {Message}", args.Code, args.Message);
+        _ = RebuildAsync("failed");
+    }
+
+    private void OnStreamStateChanged(MediaCapture sender, object args)
+    {
+        if (!ReferenceEquals(sender, _current?.Capture))
+            return;
+
+        var state = sender.CameraStreamState;
+        _streamState = state;
+        _logger.LogInformation("Camera stream state {State}", state);
+        if (state == CameraStreamState.Shutdown)
+        {
+            _ = RebuildAsync("stream-state");
+            return;
+        }
+
+        if (state == CameraStreamState.Streaming)
+            _leftStreamingAt = 0;
+        else if (_leftStreamingAt == 0)
+            _leftStreamingAt = Stopwatch.GetTimestamp();
+    }
+
+    private void OnFrameArrived(MediaFrameReader sender, MediaFrameArrivedEventArgs args)
+    {
+        // A reader still draining while its session is disposed must not mark the camera live again.
+        if (!ReferenceEquals(sender, _current?.Reader))
+            return;
+
+        try
+        {
+            using var frame = sender.TryAcquireLatestFrame();
+            var bitmap = frame?.VideoMediaFrame?.SoftwareBitmap;
+            if (bitmap == null)
+                return;
+
+            var now = Stopwatch.GetTimestamp();
+            _lastFrameAt = now;
+            if (Health != CameraHealth.Live)
+            {
+                _startAttempt = 0;
+                SetHealth(CameraHealth.Live, null);
+            }
+
+            // Copying every 30 fps frame churns ~100 MB/s on a 720p stream. The photo only has to be
+            // newer than CameraMaxPhotoAgeMs, and the painted preview runs at 15 fps.
+            if (_lastCopyAt != 0 && Stopwatch.GetElapsedTime(_lastCopyAt, now) < PreviewInterval)
+                return;
+
+            _lastCopyAt = now;
+            var copy = SoftwareBitmap.Convert(bitmap, BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+            SoftwareBitmap? previous;
+            lock (_bitmapGate)
+            {
+                previous = _latestBitmap;
+                _latestBitmap = copy;
+            }
+
+            previous?.Dispose();
+            if (_frameView?.Visibility == Visibility.Visible)
+                PaintFrame();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Camera frame was dropped");
+        }
+    }
+
+    private void PaintFrame()
+    {
+        var now = Stopwatch.GetTimestamp();
+        if (_lastPreviewAt != 0 && Stopwatch.GetElapsedTime(_lastPreviewAt, now) < PreviewInterval)
+            return;
+
+        _lastPreviewAt = now;
+        var queue = PlatformView?.DispatcherQueue;
+        if (queue == null)
+            return;
+
+        SoftwareBitmap? preview;
+        lock (_bitmapGate)
+            preview = _latestBitmap == null ? null : SoftwareBitmap.Copy(_latestBitmap);
+
+        if (preview == null)
+            return;
+
+        queue.TryEnqueue(async () =>
+        {
+            try
+            {
+                if (_frameView == null)
+                    return;
+
+                var source = new SoftwareBitmapSource();
+                await source.SetBitmapAsync(preview);
+                _frameView.Source = source;
+                // Each source holds native pixels; 15 a second for days adds up if they wait for the GC.
+                var shown = _shownPreview;
+                _shownPreview = source;
+                shown?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Camera preview paint failed");
+            }
+            finally
+            {
+                preview.Dispose();
+            }
+        });
+    }
+
+    private void OnWatchdog()
+    {
+        if (_closed == 1 || _current == null)
+            return;
+
+        var stallMs = CameraSettingsAccess.StallMilliseconds;
+        var frameAge = _lastFrameAt == 0 ? long.MaxValue : FrameAgeMs();
+        if (CameraWatchdogPolicy.Evaluate(Health, frameAge, stallMs) == CameraWatchdogAction.Stall)
+        {
+            _logger.LogWarning("Camera stalled after {AgeMs} ms", frameAge);
+            SetHealth(CameraHealth.Stalled, null);
+            _ = RebuildAsync("stall");
+            return;
+        }
+
+        if (_leftStreamingAt != 0
+            && _streamState != CameraStreamState.Streaming
+            && _streamState != CameraStreamState.Shutdown
+            && Stopwatch.GetElapsedTime(_leftStreamingAt).TotalMilliseconds >= stallMs)
+        {
+            _logger.LogWarning("Camera left streaming for {StallMs} ms ({State})", stallMs, _streamState);
+            _ = RebuildAsync("stall");
+            return;
+        }
+
+        if (Health is CameraHealth.Starting or CameraHealth.Recovering
+            && _sessionStartedAt != 0
+            && Stopwatch.GetElapsedTime(_sessionStartedAt).TotalMilliseconds > stallMs
+            && _lastFrameAt == 0)
+        {
+            _logger.LogWarning("Camera produced no frames within {StallMs} ms", stallMs);
+            SetHealth(CameraHealth.Unavailable, "No picture from the camera — retrying");
+            ScheduleRetry();
+        }
+    }
+
+    private long FrameAgeMs()
+    {
+        if (_lastFrameAt == 0)
+            return long.MaxValue;
+        return (long)Stopwatch.GetElapsedTime(_lastFrameAt).TotalMilliseconds;
+    }
+
+    private async Task<byte[]?> EncodeLatestAsync(CancellationToken cancellationToken)
+    {
+        SoftwareBitmap? copy;
+        lock (_bitmapGate)
+            copy = _latestBitmap == null ? null : SoftwareBitmap.Copy(_latestBitmap);
+
+        if (copy == null)
+            return null;
+
+        try
+        {
+            using var stream = new InMemoryRandomAccessStream();
+            var properties = new BitmapPropertySet
+            {
+                { "ImageQuality", new BitmapTypedValue(JpegQuality, PropertyType.Single) }
+            };
+            var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.JpegEncoderId, stream, properties).AsTask(cancellationToken).ConfigureAwait(true);
+            encoder.SetSoftwareBitmap(copy);
+            var longEdge = Math.Max(copy.PixelWidth, copy.PixelHeight);
+            if (longEdge > PhotoMaxEdge)
+            {
+                var scale = PhotoMaxEdge / (double)longEdge;
+                encoder.BitmapTransform.ScaledWidth = (uint)Math.Max(1, Math.Round(copy.PixelWidth * scale));
+                encoder.BitmapTransform.ScaledHeight = (uint)Math.Max(1, Math.Round(copy.PixelHeight * scale));
+                encoder.BitmapTransform.InterpolationMode = BitmapInterpolationMode.Linear;
+            }
+
+            await encoder.FlushAsync().AsTask(cancellationToken).ConfigureAwait(true);
+            stream.Seek(0);
+            var length = (int)Math.Min(stream.Size, int.MaxValue);
+            var bytes = new byte[length];
+            await stream.ReadAsync(bytes.AsBuffer(), (uint)bytes.Length, InputStreamOptions.None).AsTask(cancellationToken).ConfigureAwait(true);
+            return bytes;
+        }
+        finally
+        {
+            copy.Dispose();
+        }
+    }
+
+    private async Task<byte[]?> CapturePhotoFallbackAsync(MediaCapture media, CancellationToken cancellationToken)
+    {
+        var encoding = ImageEncodingProperties.CreateJpeg();
+        using var stream = new InMemoryRandomAccessStream();
+        await media.CapturePhotoToStreamAsync(encoding, stream).AsTask(cancellationToken).ConfigureAwait(true);
+        stream.Seek(0);
+        var length = (int)Math.Min(stream.Size, int.MaxValue);
+        var bytes = new byte[length];
+        await stream.ReadAsync(bytes.AsBuffer(), (uint)bytes.Length, InputStreamOptions.None).AsTask(cancellationToken).ConfigureAwait(true);
+        return bytes;
+    }
+
+    private async Task DisposeSessionAsync()
+    {
+        var session = _current;
+        _current = null;
+        if (session == null)
+            return;
+
+        try
+        {
+            session.Reader.FrameArrived -= OnFrameArrived;
+            session.Capture.Failed -= OnMediaFailed;
+            session.Capture.CameraStreamStateChanged -= OnStreamStateChanged;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Camera event detach threw");
+        }
+
+        await session.DisposeAsync(_logger).ConfigureAwait(true);
+        lock (_bitmapGate)
+        {
+            _latestBitmap?.Dispose();
+            _latestBitmap = null;
+            _lastFrameAt = 0;
+            _lastCopyAt = 0;
+        }
+    }
+
+    private void SetHealth(CameraHealth health, string? unavailableMessage)
+    {
+        _health = health;
+        if (health == CameraHealth.Unavailable)
+            _error = unavailableMessage;
+        var text = health switch
+        {
+            CameraHealth.Live => "Camera live",
+            CameraHealth.Unavailable => string.IsNullOrWhiteSpace(_error) ? "Camera unavailable — retrying" : _error!,
+            _ => "Camera reconnecting…"
+        };
+        _logger.LogInformation("Camera health {Health}", health);
+        VirtualView?.SetStatus(text);
+        var changed = HealthChanged;
+        var queue = PlatformView?.DispatcherQueue;
+        if (queue != null)
+            queue.TryEnqueue(() => changed?.Invoke(health));
+        else
+            changed?.Invoke(health);
+    }
+
     private static MediaFrameSource? FindColorFrameSource(MediaCapture media)
     {
         var preview = media.FrameSources.Values.FirstOrDefault(source =>
@@ -201,8 +609,6 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinPrev
             && source.Info.SourceKind == MediaFrameSourceKind.Color);
     }
 
-    /// <summary>Picks the largest preview format at or under 720p and 30 fps, preferring uncompressed formats
-    /// (no MJPEG decode on the CPU). Leaves the camera default when nothing fits.</summary>
     private static async Task<VideoEncodingProperties?> UseLightPreviewAsync(MediaCapture media)
     {
         try
@@ -224,7 +630,6 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinPrev
         }
         catch (Exception)
         {
-            // Some drivers refuse format changes; the default preview still works.
             return null;
         }
     }
@@ -232,10 +637,97 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinPrev
     private static double FrameRate(VideoEncodingProperties format) =>
         format.FrameRate.Denominator == 0 ? 0 : (double)format.FrameRate.Numerator / format.FrameRate.Denominator;
 
-    private void Fail(string message)
+    private sealed class CameraSession
     {
-        _error = message;
-        _ready.TrySetResult();
-        VirtualView?.SetStatus(message);
+        private readonly MediaPlayerElement _view;
+
+        public CameraSession(
+            MediaCapture capture,
+            MediaFrameSource source,
+            MediaSource? mediaSource,
+            MediaPlayer? player,
+            MediaFrameReader reader,
+            MediaPlayerElement view)
+        {
+            Capture = capture;
+            Source = source;
+            MediaSource = mediaSource;
+            Player = player;
+            Reader = reader;
+            _view = view;
+        }
+
+        public MediaCapture Capture { get; }
+        public MediaFrameSource Source { get; }
+        public MediaSource? MediaSource { get; }
+        public MediaPlayer? Player { get; }
+        public MediaFrameReader Reader { get; }
+
+        public async Task DisposeAsync(ILogger logger)
+        {
+            var queue = _view.DispatcherQueue;
+            if (queue != null)
+            {
+                var detached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!queue.TryEnqueue(() =>
+                    {
+                        try
+                        {
+                            _view.SetMediaPlayer(null);
+                        }
+                        finally
+                        {
+                            detached.TrySetResult();
+                        }
+                    }))
+                    detached.TrySetResult();
+                await detached.Task.ConfigureAwait(false);
+            }
+
+            try
+            {
+                Player?.Pause();
+                Player?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Camera player dispose threw");
+            }
+
+            try
+            {
+                MediaSource?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Camera media source dispose threw");
+            }
+
+            try
+            {
+                await Reader.StopAsync().AsTask().ConfigureAwait(false);
+                Reader.Dispose();
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Camera frame reader dispose threw");
+            }
+
+            var capture = Capture;
+            var disposed = Task.Run(() =>
+            {
+                try
+                {
+                    capture.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Camera MediaCapture dispose threw");
+                }
+            });
+            var finished = await Task.WhenAny(disposed, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
+            if (finished != disposed)
+                logger.LogWarning("MediaCapture dispose timed out");
+        }
     }
 }

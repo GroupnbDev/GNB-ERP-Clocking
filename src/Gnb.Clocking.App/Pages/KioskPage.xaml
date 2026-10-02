@@ -18,20 +18,20 @@
             <!-- ============ Header ============ -->
             <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="24">
                 <HorizontalStackLayout Spacing="14" VerticalOptions="Center">
-                    <Border x:Name="LogoTile" WidthRequest="52" HeightRequest="52" StrokeThickness="0"
-                            StrokeShape="RoundRectangle 16">
-                        <Border.Background>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                <GradientStop Color="{StaticResource Brand}" Offset="0" />
-                                <GradientStop Color="{StaticResource Highlight}" Offset="1" />
-                            </LinearGradientBrush>
-                        </Border.Background>
-                        <Border.Shadow>
-                            <Shadow Brush="#AB1100" Opacity="0.45" Radius="22" Offset="0,6" />
-                        </Border.Shadow>
-                        <Label Text="GN" FontFamily="OpenSansSemibold" FontSize="19" TextColor="#FFFFFF"
-                               HorizontalTextAlignment="Center" VerticalTextAlignment="Center" />
-                    </Border>
+                    <Grid WidthRequest="52" HeightRequest="52">
+                        <Border x:Name="LogoGlow" BackgroundColor="#AB1100" Opacity="0.35" StrokeThickness="0"
+                                StrokeShape="RoundRectangle 18" Scale="1.2" InputTransparent="True" />
+                        <Border x:Name="LogoTile" StrokeThickness="0" StrokeShape="RoundRectangle 16">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="{StaticResource Brand}" Offset="0" />
+                                    <GradientStop Color="{StaticResource Highlight}" Offset="1" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <Label Text="GN" FontFamily="OpenSansSemibold" FontSize="19" TextColor="#FFFFFF"
+                                   HorizontalTextAlignment="Center" VerticalTextAlignment="Center" />
+                        </Border>
+                    </Grid>
                     <VerticalStackLayout VerticalOptions="Center" Spacing="0">
                         <Label Text="GroupNB" FontFamily="OpenSansSemibold" FontSize="24" />
                         <Label Text="RFID time clock" FontSize="14" TextColor="{DynamicResource Muted}" />
@@ -136,7 +136,8 @@
                                 <Label Text="Badge + photo verification" FontSize="13" TextColor="{DynamicResource Faint}"
                                        VerticalOptions="Center" />
                             </HorizontalStackLayout>
-                            <Border Grid.Column="1" Padding="12,6" StrokeThickness="1" StrokeShape="RoundRectangle 14"
+                            <HorizontalStackLayout Grid.Column="1" Spacing="8" VerticalOptions="Center">
+                            <Border Padding="12,6" StrokeThickness="1" StrokeShape="RoundRectangle 14"
                                     BackgroundColor="{DynamicResource Glass}" Stroke="{DynamicResource Line}">
                                 <HorizontalStackLayout Spacing="8">
                                     <Border x:Name="CameraDot" WidthRequest="8" HeightRequest="8" StrokeThickness="0"
@@ -145,6 +146,22 @@
                                            TextColor="{DynamicResource Muted}" VerticalOptions="Center" />
                                 </HorizontalStackLayout>
                             </Border>
+                            <Border x:Name="ResetCameraButton" Padding="12,6" HeightRequest="44"
+                                    StrokeThickness="1" StrokeShape="RoundRectangle 14"
+                                    BackgroundColor="{DynamicResource Glass}" Stroke="{DynamicResource Line}">
+                                <Border.GestureRecognizers>
+                                    <TapGestureRecognizer Tapped="OnResetCameraTapped" />
+                                    <PointerGestureRecognizer PointerEntered="OnResetCameraPointerEntered"
+                                                              PointerExited="OnResetCameraPointerExited" />
+                                </Border.GestureRecognizers>
+                                <HorizontalStackLayout Spacing="8" VerticalOptions="Center" InputTransparent="True">
+                                    <Label x:Name="ResetCameraGlyph" Text="&#x21BB;" FontSize="16"
+                                           TextColor="{DynamicResource Muted}" VerticalOptions="Center" />
+                                    <Label x:Name="ResetCameraLabel" Text="Reset camera" FontSize="13"
+                                           TextColor="{DynamicResource Muted}" VerticalOptions="Center" />
+                                </HorizontalStackLayout>
+                            </Border>
+                            </HorizontalStackLayout>
 
                             <!-- Hidden sink for the USB reader's keystrokes. -->
                             <Entry x:Name="RfidEntry"

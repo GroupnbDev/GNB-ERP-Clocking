@@ -1,9 +1,13 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Windows.Input;
+using Gnb.Clocking.App.Configuration;
 using Gnb.Clocking.Application.Clocking;
 using Gnb.Clocking.Domain.Clocking;
 using Gnb.Clocking.Infrastructure.ClockKiosk;
+using Microsoft.Extensions.Logging;
 
 namespace Gnb.Clocking.App.ViewModels;
 
@@ -43,6 +47,14 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     private bool _hasRfidHolderStatus;
     private bool _isReassign;
     private int _returnTicket;
+    private readonly ILogger<KioskViewModel> _logger;
+    private readonly CameraSettings _cameraSettings;
+    private readonly ResetCameraCommand _resetCamera;
+    private DateTime _lastTapUtc = DateTime.MinValue;
+    private DateTime? _lastDailyRebuild;
+    private int _dailyWaits;
+    private bool _isResettingCamera;
+    private bool _resetCoolingDown;
     private bool _started;
     private bool _busy;
     private bool _refreshing;
@@ -90,13 +102,18 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         IClock clock,
         IClockCamera camera,
         IClockPhotoStore photos,
-        ClockKioskApiOptions kiosk)
+        ClockKioskApiOptions kiosk,
+        CameraSettings cameraSettings,
+        ILogger<KioskViewModel> logger)
     {
         _directory = directory;
         _clocking = clocking;
         _clock = clock;
         _camera = camera;
         _photos = photos;
+        _cameraSettings = cameraSettings;
+        _logger = logger;
+        _resetCamera = new ResetCameraCommand(this);
         _scopeLine = kiosk.ScopeLine;
         _connectionCaption = kiosk.IsConfigured
             ? "Connecting to the GroupNB clock server…"
@@ -166,7 +183,14 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     public string StatusDetail { get => _statusDetail; private set => SetProperty(ref _statusDetail, value); }
     public string ActionTitle { get => _actionTitle; private set => SetProperty(ref _actionTitle, value); }
     public bool IsOnShift { get => _isOnShift; private set => SetProperty(ref _isOnShift, value); }
-    public bool IsBusy { get => _isBusy; private set => SetProperty(ref _isBusy, value); }
+    public bool IsBusy { get => _isBusy; private set => SetFlag(ref _isBusy, value); }
+    public bool IsResettingCamera { get => _isResettingCamera; private set => SetFlag(ref _isResettingCamera, value); }
+    public bool CanResetCamera => !_busy && !_isResettingCamera && !_resetCoolingDown;
+    public string ResetCameraText => IsResettingCamera ? "Resetting…" : "Reset camera";
+    public ICommand ResetCameraCommand => _resetCamera;
+
+    /// <summary>The page re-claims the badge field. Camera work must not keep the keyboard.</summary>
+    public event Action? FocusBadgeRequested;
     public string SuccessTitle { get => _successTitle; private set => SetProperty(ref _successTitle, value); }
     public string SuccessTime { get => _successTime; private set => SetProperty(ref _successTime, value); }
     public string SuccessDetail { get => _successDetail; private set => SetProperty(ref _successDetail, value); }
@@ -209,17 +233,35 @@ public sealed class KioskViewModel : INotifyPropertyChanged
                 _ = RefreshPunchesAsync();
             return true;
         });
+        Microsoft.Maui.Controls.Application.Current?.Dispatcher.StartTimer(TimeSpan.FromSeconds(60), () =>
+        {
+            _ = MaybeDailyRebuildAsync();
+            return true;
+        });
     }
 
     public async Task SubmitAsync()
     {
+        var started = Stopwatch.GetTimestamp();
         var rfid = RfidNormalizer.Normalize(BadgeText);
         BadgeText = string.Empty;
+        Exception? failure = null;
         if (rfid.Length < 8)
             return;
 
         if (_busy)
             return;
+
+        _lastTapUtc = DateTime.UtcNow;
+        if (_camera.Health != CameraHealth.Live)
+        {
+            UnknownMessage = "The camera is reconnecting. Hold the badge to the reader again in a few seconds.";
+            Phase = KioskPhase.Unknown;
+            LogTap(started, rfid, null);
+            var ticket = ++_returnTicket;
+            _ = ReturnToIdleAsync(ticket, TimeSpan.FromSeconds(4), KioskPhase.Unknown);
+            return;
+        }
 
         _returnTicket++;
         _busy = true;
@@ -266,6 +308,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         }
         catch (BadgeNotWorkingException ex)
         {
+            failure = ex;
             ShowRfidDialog(
                 string.IsNullOrWhiteSpace(ex.Rfid) ? rfid : ex.Rfid,
                 reassign: true,
@@ -274,18 +317,79 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         }
         catch (ClockingException ex)
         {
+            failure = ex;
             UnknownMessage = ex.Message;
             Phase = KioskPhase.Unknown;
+            var ticket = ++_returnTicket;
+            _ = ReturnToIdleAsync(ticket, TimeSpan.FromSeconds(4), KioskPhase.Unknown);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
+            failure = ex;
             UnknownMessage = "This tap did not finish. Hold the badge to the reader again.";
             Phase = KioskPhase.Unknown;
+            var ticket = ++_returnTicket;
+            _ = ReturnToIdleAsync(ticket, TimeSpan.FromSeconds(4), KioskPhase.Unknown);
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+            _logger.LogError(ex, "Tap failed");
+            UnknownMessage = "Something went wrong with this tap. Hold the badge to the reader again.";
+            Phase = KioskPhase.Unknown;
+            var ticket = ++_returnTicket;
+            _ = ReturnToIdleAsync(ticket, TimeSpan.FromSeconds(4), KioskPhase.Unknown);
         }
         finally
         {
             _busy = false;
             IsBusy = false;
+            LogTap(started, rfid, failure);
+        }
+    }
+
+    public async Task ResetCameraAsync()
+    {
+        if (_busy || _isResettingCamera || _resetCoolingDown)
+            return;
+
+        var started = Stopwatch.GetTimestamp();
+        _logger.LogInformation("Camera reset started trigger manual");
+        Dismiss();
+        FocusBadgeRequested?.Invoke();
+        IsResettingCamera = true;
+        try
+        {
+            // The rebuild returns once a session is opened or given up on; only a frame proves the camera is back.
+            var budget = TimeSpan.FromSeconds(15);
+            await _camera.RebuildAsync("manual").WaitAsync(budget);
+            var remaining = budget - Stopwatch.GetElapsedTime(started);
+            if (!await WaitForLiveAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero))
+                throw new ClockingException($"The camera is still {_camera.Health} after the reset.");
+
+            _logger.LogInformation(
+                "Camera reset finished trigger manual elapsed {ElapsedMs} outcome ok",
+                ElapsedMs(started));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Camera reset finished trigger manual elapsed {ElapsedMs} outcome failed",
+                ElapsedMs(started));
+            UnknownMessage = "The camera could not restart. Check that it is plugged in and not used by another app.";
+            Phase = KioskPhase.Unknown;
+            var ticket = ++_returnTicket;
+            _ = ReturnToIdleAsync(ticket, TimeSpan.FromSeconds(4), KioskPhase.Unknown);
+        }
+        finally
+        {
+            IsResettingCamera = false;
+            FocusBadgeRequested?.Invoke();
+            _resetCoolingDown = true;
+            _resetCamera.RaiseCanExecuteChanged();
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanResetCamera)));
+            _ = CoolResetAsync();
         }
     }
 
@@ -359,14 +463,36 @@ public sealed class KioskViewModel : INotifyPropertyChanged
                 TaskScheduler.Default);
             UnknownMessage = "The camera did not respond. Hold the badge to the reader again.";
             Phase = KioskPhase.Unknown;
+            var missed = ++_returnTicket;
+            _ = ReturnToIdleAsync(missed, TimeSpan.FromSeconds(4), KioskPhase.Unknown);
             return;
         }
 
-        var jpeg = await shot;
+        byte[]? jpeg;
+        try
+        {
+            jpeg = await shot;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Camera capture failed");
+            _camera.ReportFailure(ex);
+            UnknownMessage = "The camera is reconnecting. Hold the badge to the reader again in a few seconds.";
+            Phase = KioskPhase.Unknown;
+            var failed = ++_returnTicket;
+            _ = ReturnToIdleAsync(failed, TimeSpan.FromSeconds(4), KioskPhase.Unknown);
+            return;
+        }
         if (jpeg == null || jpeg.Length == 0)
         {
             UnknownMessage = "A photo is required to clock in or out.";
             Phase = KioskPhase.Unknown;
+            var missing = ++_returnTicket;
+            _ = ReturnToIdleAsync(missing, TimeSpan.FromSeconds(4), KioskPhase.Unknown);
             return;
         }
 
@@ -414,6 +540,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         SuccessPhoto = string.Empty;
         HasSuccessPhoto = false;
         Phase = KioskPhase.Idle;
+        FocusBadgeRequested?.Invoke();
     }
 
     private void Show(CandidateBadge badge)
@@ -616,4 +743,114 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         return true;
     }
+
+    private bool SetFlag(ref bool field, bool value, [CallerMemberName] string? propertyName = null)
+    {
+        if (!SetProperty(ref field, value, propertyName))
+            return false;
+
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanResetCamera)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ResetCameraText)));
+        _resetCamera.RaiseCanExecuteChanged();
+        return true;
+    }
+
+    private async Task<bool> WaitForLiveAsync(TimeSpan timeout)
+    {
+        if (_camera.Health == CameraHealth.Live)
+            return true;
+
+        var live = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnHealth(CameraHealth health)
+        {
+            if (health == CameraHealth.Live)
+                live.TrySetResult();
+        }
+
+        _camera.HealthChanged += OnHealth;
+        try
+        {
+            if (_camera.Health == CameraHealth.Live)
+                return true;
+
+            return await Task.WhenAny(live.Task, Task.Delay(timeout)) == live.Task;
+        }
+        finally
+        {
+            _camera.HealthChanged -= OnHealth;
+        }
+    }
+
+    private async Task CoolResetAsync()
+    {
+        await Task.Delay(TimeSpan.FromSeconds(5));
+        _resetCoolingDown = false;
+        _resetCamera.RaiseCanExecuteChanged();
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanResetCamera)));
+    }
+
+    private async Task MaybeDailyRebuildAsync()
+    {
+        var now = DateTime.Now;
+        if (!CameraRecoveryPolicy.IsDailyRebuildDue(now, _lastDailyRebuild, _cameraSettings.DailyRebuildAt))
+        {
+            _dailyWaits = 0;
+            return;
+        }
+
+        if (_dailyWaits >= 30)
+            return;
+
+        if (Phase != KioskPhase.Idle || _busy || DateTime.UtcNow - _lastTapUtc < TimeSpan.FromSeconds(60))
+        {
+            _dailyWaits++;
+            return;
+        }
+
+        _dailyWaits++;
+        try
+        {
+            await _camera.RebuildAsync("daily");
+            _lastDailyRebuild = DateTime.Now;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Daily camera rebuild failed");
+        }
+    }
+
+    private void LogTap(long started, string rfid, Exception? failure)
+    {
+        _logger.LogInformation(
+            "Tap finished phase {Phase} elapsed {ElapsedMs} ms badge {Badge} exception {ExceptionType}",
+            Phase,
+            ElapsedMs(started),
+            MaskRfid(rfid),
+            failure?.GetType().Name ?? "none");
+    }
+
+    private static long ElapsedMs(long started) => (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+
+    private static string MaskRfid(string rfid)
+    {
+        if (string.IsNullOrEmpty(rfid))
+            return "****";
+        var tail = rfid.Length <= 4 ? rfid : rfid[^4..];
+        return "****" + tail;
+    }
+}
+
+public sealed class ResetCameraCommand : ICommand
+{
+    private readonly KioskViewModel _owner;
+
+    public ResetCameraCommand(KioskViewModel owner) => _owner = owner;
+
+    public event EventHandler? CanExecuteChanged;
+
+    public bool CanExecute(object? parameter) => _owner.CanResetCamera;
+
+    public void Execute(object? parameter) => _ = _owner.ResetCameraAsync();
+
+    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
 }

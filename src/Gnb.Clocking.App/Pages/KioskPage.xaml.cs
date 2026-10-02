@@ -1,8 +1,11 @@
 using Gnb.Clocking.App.Camera;
 using Gnb.Clocking.App.Controls;
+using Gnb.Clocking.App.Diagnostics;
 using Gnb.Clocking.App.Theming;
 using Gnb.Clocking.App.ViewModels;
+using Gnb.Clocking.Application.Clocking;
 using Gnb.Clocking.Domain.Clocking;
+using Microsoft.Extensions.Logging;
 using Microsoft.Maui.Controls.Shapes;
 
 namespace Gnb.Clocking.App.Pages;
@@ -25,6 +28,8 @@ public partial class KioskPage : ContentPage
     private static readonly string[] StepNames = { "Scan badge", "Match", "Capture", "Saved" };
 
     private readonly KioskViewModel _viewModel;
+    private readonly MauiClockCamera _camera;
+    private readonly ILogger<KioskPage> _logger = KioskLog.Create<KioskPage>();
     private readonly List<(Border Pill, Border Dot, Label Label)> _steps = new();
     private readonly List<BoxView> _links = new();
     private readonly Dictionary<Label, int> _shownCounts = new();
@@ -43,11 +48,15 @@ public partial class KioskPage : ContentPage
     {
         InitializeComponent();
         _viewModel = viewModel;
+        _camera = camera;
         BindingContext = viewModel;
+        viewModel.FocusBadgeRequested += FocusBadge;
 
         BuildStepper();
 
         camera.Attach(ClockCamera);
+        camera.HealthChanged += OnCameraHealthChanged;
+        ResetCameraButton.HandlerChanged += (_, _) => ApplyResetCursor(_viewModel.CanResetCamera);
         ClockCamera.PropertyChanged += OnCameraPropertyChanged;
         viewModel.PropertyChanged += OnViewModelPropertyChanged;
         PaintTheme(animate: false);
@@ -75,9 +84,44 @@ public partial class KioskPage : ContentPage
             Window.Resumed += OnWindowResumed;
             Window.Activated += OnWindowActivated;
         }
-        // The native field is not in the window yet during OnAppearing. Focus on the next turn.
-        RfidEntry.Unfocused += (_, _) => BadgeEntrySetup.ClaimSoon();
+        RfidEntry.Unfocused += OnRfidUnfocused;
         Dispatcher.Dispatch(FocusBadge);
+#if WINDOWS
+        Platforms.Windows.FullScreenToggle.ResetCameraRequested += OnResetCameraKey;
+#endif
+    }
+
+    private void OnRfidUnfocused(object? sender, FocusEventArgs e) => BadgeEntrySetup.ClaimSoon();
+
+    private void OnResetCameraTapped(object? sender, TappedEventArgs e)
+    {
+        FocusBadge();
+        if (_viewModel.ResetCameraCommand.CanExecute(null))
+            _viewModel.ResetCameraCommand.Execute(null);
+    }
+
+    private void OnResetCameraPointerEntered(object? sender, PointerEventArgs e)
+    {
+        _resetHovered = true;
+        ShowResetHover(_viewModel.CanResetCamera);
+    }
+
+    private void OnResetCameraPointerExited(object? sender, PointerEventArgs e)
+    {
+        _resetHovered = false;
+        ShowResetHover(false);
+    }
+
+    private void OnResetCameraKey() => MainThread.BeginInvokeOnMainThread(() => OnResetCameraTapped(this, null!));
+
+    private void OnCameraHealthChanged(CameraHealth health)
+    {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            PaintCamera();
+            if (health == CameraHealth.Live)
+                FocusBadge();
+        });
     }
 
     protected override void OnDisappearing()
@@ -91,6 +135,10 @@ public partial class KioskPage : ContentPage
             Window.Resumed -= OnWindowResumed;
             Window.Activated -= OnWindowActivated;
         }
+        RfidEntry.Unfocused -= OnRfidUnfocused;
+#if WINDOWS
+        Platforms.Windows.FullScreenToggle.ResetCameraRequested -= OnResetCameraKey;
+#endif
         StopAmbient();
         base.OnDisappearing();
     }
@@ -98,6 +146,7 @@ public partial class KioskPage : ContentPage
     // Minimized or hidden: nobody can see the motion, so spend nothing on it.
     private void OnWindowStopped(object? sender, EventArgs e)
     {
+        _logger.LogInformation("Window Stopped");
         Aurora.Pause();
         Halo.Pause();
         StopAmbient();
@@ -118,13 +167,19 @@ public partial class KioskPage : ContentPage
 
     private void OnWindowResumed(object? sender, EventArgs e)
     {
+        _logger.LogInformation("Window Resumed");
         Aurora.Resume();
         Halo.Resume();
         StartAmbient();
         FocusBadge();
+        _ = _camera.RebuildAsync("window-resumed");
     }
 
-    private void OnWindowActivated(object? sender, EventArgs e) => FocusBadge();
+    private void OnWindowActivated(object? sender, EventArgs e)
+    {
+        _logger.LogInformation("Window Activated");
+        FocusBadge();
+    }
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
@@ -154,6 +209,14 @@ public partial class KioskPage : ContentPage
             case nameof(KioskViewModel.Server):
                 PaintServer();
                 break;
+            case nameof(KioskViewModel.CanResetCamera):
+            case nameof(KioskViewModel.ResetCameraText):
+            case nameof(KioskViewModel.IsResettingCamera):
+            case nameof(KioskViewModel.IsBusy):
+                PaintResetCamera();
+                if (!_viewModel.IsBusy)
+                    FocusBadge();
+                break;
             case nameof(KioskViewModel.OnShiftCount):
                 SetCount(OnShiftValue, _viewModel.OnShiftCount, animate: true);
                 break;
@@ -162,9 +225,6 @@ public partial class KioskPage : ContentPage
                 break;
             case nameof(KioskViewModel.ClockOutsToday):
                 SetCount(OutValue, _viewModel.ClockOutsToday, animate: true);
-                break;
-            case nameof(KioskViewModel.IsBusy) when !_viewModel.IsBusy:
-                FocusBadge();
                 break;
         }
     }
@@ -1002,17 +1062,60 @@ public partial class KioskPage : ContentPage
             return;
 
         PaintCamera();
-        if (ClockCamera.StatusText == "Camera live")
-            FocusBadge();
     }
 
     private void PaintCamera()
     {
-        var live = ClockCamera.StatusText == "Camera live";
+        var live = _camera.Health == CameraHealth.Live;
         CameraFallback.Text = ClockCamera.StatusText;
         CameraFallback.IsVisible = !live;
         CameraChipLabel.Text = ClockCamera.StatusText;
         CameraDot.BackgroundColor = live ? StatusColors.SuccessSolid : Slate;
+        PaintResetCamera();
+    }
+
+    private bool _resetHovered;
+    private bool _resetHoverShown;
+
+    private void PaintResetCamera()
+    {
+        ResetCameraLabel.Text = _viewModel.ResetCameraText;
+        var enabled = _viewModel.CanResetCamera;
+        ResetCameraButton.Opacity = enabled ? 1 : 0.45;
+        ApplyResetCursor(enabled);
+        ShowResetHover(_resetHovered && enabled);
+    }
+
+    private void ShowResetHover(bool hover)
+    {
+        if (hover == _resetHoverShown)
+            return;
+
+        _resetHoverShown = hover;
+        var ink = Resource("Ink", Color.FromArgb("#1A202C"));
+        var muted = Resource("Muted", Color.FromArgb("#4A5568"));
+        ResetCameraButton.Stroke = Resource(hover ? "LineStrong" : "Line", muted);
+        ResetCameraLabel.TextColor = hover ? ink : muted;
+        ResetCameraGlyph.TextColor = hover ? ink : muted;
+        ResetCameraButton.AbortAnimation("ScaleTo");
+        _ = ResetCameraButton.ScaleTo(hover ? 1.06 : 1, 160, Easing.CubicOut);
+    }
+
+    private void ApplyResetCursor(bool hand)
+    {
+#if WINDOWS
+        if (ResetCameraButton.Handler?.PlatformView is not Microsoft.UI.Xaml.UIElement element)
+            return;
+
+        // ProtectedCursor is protected on UIElement; a MAUI view's platform element is not ours to subclass.
+        var cursor = Microsoft.UI.Input.InputSystemCursor.Create(
+            hand
+                ? Microsoft.UI.Input.InputSystemCursorShape.Hand
+                : Microsoft.UI.Input.InputSystemCursorShape.Arrow);
+        typeof(Microsoft.UI.Xaml.UIElement)
+            .GetProperty("ProtectedCursor", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?.SetValue(element, cursor);
+#endif
     }
 
     // ------------------------------------------------------------------ Live activity
@@ -1123,13 +1226,12 @@ public partial class KioskPage : ContentPage
         Ripple(EmptyRingOuter, "empty-outer", 2600, 2.1);
         Ripple(EmptyRingInner, "empty-inner", 2600, 1.6);
 
-        // An animated shadow re-blurs every frame, so the logo glow is a full-motion extra only.
-        if (MotionSettings.Level == MotionLevel.Full && LogoTile.Shadow is Shadow glow)
+        if (MotionSettings.Level == MotionLevel.Full)
         {
             var animation = new Animation();
-            animation.Add(0, 0.5, new Animation(v => glow.Opacity = (float)v, 0.2, 0.7, Easing.SinInOut));
-            animation.Add(0.5, 1, new Animation(v => glow.Opacity = (float)v, 0.7, 0.2, Easing.SinInOut));
-            animation.Commit(LogoTile, "logo-glow", length: 3200, repeat: () => true);
+            animation.Add(0, 0.5, new Animation(v => LogoGlow.Opacity = v, 0.2, 0.55, Easing.SinInOut));
+            animation.Add(0.5, 1, new Animation(v => LogoGlow.Opacity = v, 0.55, 0.2, Easing.SinInOut));
+            animation.Commit(LogoGlow, "logo-glow", length: 3200, repeat: () => true);
         }
     }
 
@@ -1140,7 +1242,7 @@ public partial class KioskPage : ContentPage
         FeedRipple.AbortAnimation("feed");
         EmptyRingOuter.AbortAnimation("empty-outer");
         EmptyRingInner.AbortAnimation("empty-inner");
-        LogoTile.AbortAnimation("logo-glow");
+        LogoGlow.AbortAnimation("logo-glow");
         ScanLine.AbortAnimation("scan");
         foreach (var view in new VisualElement[] { LiveRipple, FeedRipple, EmptyRingOuter, EmptyRingInner })
         {

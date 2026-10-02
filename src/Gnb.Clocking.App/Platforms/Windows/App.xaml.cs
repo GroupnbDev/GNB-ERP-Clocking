@@ -1,4 +1,6 @@
 ﻿using Microsoft.UI.Xaml;
+using Gnb.Clocking.App.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 // To learn more about WinUI, the WinUI project structure,
 // and more about our project templates, see: http://aka.ms/winui-project-info.
@@ -17,6 +19,10 @@ public partial class App : MauiWinUIApplication
 	public App()
 	{
 		this.InitializeComponent();
+		UnhandledException += (_, args) =>
+		{
+			KioskLog.Create<App>().LogCritical(args.Exception, "WinUI unhandled exception");
+		};
 	}
 
 	protected override MauiApp CreateMauiApp() => MauiProgram.CreateMauiApp();

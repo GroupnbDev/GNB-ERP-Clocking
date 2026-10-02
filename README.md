@@ -21,9 +21,15 @@ ClockKiosk__BaseUrl=
 ClockKiosk__ApiKey=
 ClockKiosk__TenantIds=
 ClockKiosk__OrganizationIds=
+ClockKiosk__CameraStallSeconds=5
+ClockKiosk__CameraMaxPhotoAgeMs=1000
+ClockKiosk__CameraDailyRebuildAt=03:00
+ClockKiosk__LogRetentionDays=14
 ```
 
 `.env` is built into the exe, so rebuild or republish after you change it.
+
+Logs land in `{AppData}/logs/kiosk-yyyyMMdd.log`. Leave `CameraDailyRebuildAt` empty to skip the nightly camera restart.
 
 ## Run from source
 
@@ -52,6 +58,7 @@ To install on another kiosk PC, copy the whole `publish\kiosk` folder.
 | Key | Action             |
 | --- | ------------------ |
 | F11 | Toggle full screen |
+| F5  | Reset camera       |
 
 ## Tests
 

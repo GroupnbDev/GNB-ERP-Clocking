@@ -1,4 +1,6 @@
 using Gnb.Clocking.Application.Clocking;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Gnb.Clocking.Infrastructure.ClockKiosk.Offline;
 
@@ -18,12 +20,14 @@ public sealed class ClockSyncWorker
 
     private readonly ClockKioskApiClient _api;
     private readonly OfflineClockStore _store;
+    private readonly ILogger<ClockSyncWorker> _logger;
     private readonly SemaphoreSlim _drain = new(1, 1);
 
-    public ClockSyncWorker(ClockKioskApiClient api, OfflineClockStore store)
+    public ClockSyncWorker(ClockKioskApiClient api, OfflineClockStore store, ILogger<ClockSyncWorker>? logger = null)
     {
         _api = api;
         _store = store;
+        _logger = logger ?? NullLogger<ClockSyncWorker>.Instance;
     }
 
     public async Task<SyncOutcome> DrainAsync(CancellationToken cancellationToken = default)
@@ -152,10 +156,12 @@ public sealed class ClockSyncWorker
 
     private async Task PruneAsync()
     {
-        List<QueuedPunch> old = await _store
-            .TakeSyncedOlderThanAsync(DateTimeOffset.Now - SyncedRetention)
-            .ConfigureAwait(false);
-        foreach (QueuedPunch punch in old)
+        var cutoff = DateTimeOffset.Now - SyncedRetention;
+        List<QueuedPunch> old = await _store.TakeSyncedOlderThanAsync(cutoff).ConfigureAwait(false);
+        List<QueuedPunch> duplicates = await _store.TakeDuplicateOlderThanAsync(cutoff).ConfigureAwait(false);
+        foreach (QueuedPunch punch in old.Concat(duplicates))
             await _store.DeleteAsync(punch).ConfigureAwait(false);
+        if (old.Count + duplicates.Count > 0)
+            _logger.LogInformation("Pruned {Synced} synced and {Duplicate} duplicate punches", old.Count, duplicates.Count);
     }
 }

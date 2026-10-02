@@ -58,6 +58,24 @@ public sealed class HttpClockPhotoStore : IClockPhotoStore
         if (!string.IsNullOrEmpty(folder))
             Directory.CreateDirectory(folder);
         File.Move(local.AbsolutePath, absolute, overwrite: true);
+        MoveThumbnail(local.AbsolutePath, absolute);
         return new ClockPhoto(serverPath, absolute);
+    }
+
+    /// <summary>The activity list reads the thumbnail beside the photo, so it follows the photo's new folder.</summary>
+    private static void MoveThumbnail(string fromPhoto, string toPhoto)
+    {
+        var from = ClockPhotoThumbnail.PathFor(fromPhoto);
+        try
+        {
+            if (File.Exists(from))
+                File.Move(from, ClockPhotoThumbnail.PathFor(toPhoto), overwrite: true);
+            else
+                ClockPhotoThumbnail.TryWrite(toPhoto);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The punch and its photo are saved; a missing thumbnail only shows initials in the list.
+        }
     }
 }

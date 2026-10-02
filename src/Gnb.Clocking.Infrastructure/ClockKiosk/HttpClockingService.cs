@@ -1,6 +1,8 @@
 using Gnb.Clocking.Application.Clocking;
 using Gnb.Clocking.Domain.Clocking;
 using Gnb.Clocking.Infrastructure.ClockKiosk.Offline;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Gnb.Clocking.Infrastructure.ClockKiosk;
 
@@ -22,19 +24,22 @@ public sealed class HttpClockingService : IClockingService
     private readonly OfflineClockStore _store;
     private readonly ClockSyncWorker _sync;
     private readonly string _photoRoot;
+    private readonly ILogger<HttpClockingService> _logger;
 
     public HttpClockingService(
         ClockKioskApiClient api,
         KioskShiftCache shifts,
         ClockKioskApiOptions options,
         OfflineClockStore store,
-        ClockSyncWorker sync)
+        ClockSyncWorker sync,
+        ILogger<HttpClockingService>? logger = null)
     {
         _api = api;
         _shifts = shifts;
         _store = store;
         _sync = sync;
         _photoRoot = options.PhotoRoot;
+        _logger = logger ?? NullLogger<HttpClockingService>.Instance;
     }
 
     public int OpenCount => _shifts.OpenCount;
@@ -180,6 +185,7 @@ public sealed class HttpClockingService : IClockingService
         }
         catch (ClockOfflineException)
         {
+            _logger.LogInformation("Punch queued offline for candidate {CandidateId}", candidate.CandidateId);
             // Keep the punch on the device with its own id, so the drain cannot double it later.
             return await QueueAsync(candidate, photo, isClockOut, clientPunchId, capturedAt, relative).ConfigureAwait(false);
         }
