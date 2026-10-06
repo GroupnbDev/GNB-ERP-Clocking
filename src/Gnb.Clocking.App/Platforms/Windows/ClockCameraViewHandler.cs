@@ -59,6 +59,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
     private int _closed;
     private int _skipSharedPreview;
     private Task? _rebuild;
+    private Task? _captureDispose;
     private DispatcherQueueTimer? _watchdog;
     private CameraStreamState _streamState = CameraStreamState.Streaming;
     private long _leftStreamingAt;
@@ -172,13 +173,24 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
             return;
 
         var started = Stopwatch.GetTimestamp();
-        await _session.WaitAsync().ConfigureAwait(true);
+        await _session.WaitAsync().ConfigureAwait(false);
         try
         {
+            // Reset is tapped on the window thread. A finished wait stays there, and MediaCapture
+            // teardown on that thread is what older laptops report as "Not Responding", then close.
+            await LeaveWindowThreadAsync().ConfigureAwait(false);
             await RunOnUiAsync(() => SetHealth(trigger == "start" ? CameraHealth.Starting : CameraHealth.Recovering, null)).ConfigureAwait(false);
             _logger.LogInformation("Camera rebuild trigger {Trigger}", trigger);
-            await DisposeSessionAsync().ConfigureAwait(true);
-            var opened = await StartSessionAsync().ConfigureAwait(true);
+            var released = await DisposeSessionAsync().ConfigureAwait(false);
+            if (!released)
+            {
+                _logger.LogWarning("Camera rebuild trigger {Trigger} left the previous camera open", trigger);
+                await RunOnUiAsync(() => SetHealth(CameraHealth.Unavailable, "Camera unavailable — retrying")).ConfigureAwait(false);
+                ScheduleRetry();
+                return;
+            }
+
+            var opened = await StartSessionAsync().ConfigureAwait(false);
             var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             if (opened)
             {
@@ -237,6 +249,13 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
 
     private async Task<bool> StartSessionAsync()
     {
+        await LeaveWindowThreadAsync().ConfigureAwait(false);
+        if (_captureDispose is { IsCompleted: false })
+        {
+            _logger.LogWarning("Camera is still closing from the last reset");
+            return false;
+        }
+
         var view = _playerView;
         if (view == null)
             return false;
@@ -345,36 +364,80 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         catch (UnauthorizedAccessException ex)
         {
             _logger.LogError(ex, "Camera permission denied");
-            ReleaseFailedStart(media, reader);
+            await ReleaseFailedStartAsync(media, reader).ConfigureAwait(false);
             await RunOnUiAsync(() => SetHealth(CameraHealth.Unavailable, "Allow camera access to save clock photos.")).ConfigureAwait(false);
             return false;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Camera start failed");
-            ReleaseFailedStart(media, reader);
+            await ReleaseFailedStartAsync(media, reader).ConfigureAwait(false);
             await RunOnUiAsync(() => SetHealth(CameraHealth.Unavailable, "Camera unavailable — retrying")).ConfigureAwait(false);
             return false;
         }
     }
 
-    private void ReleaseFailedStart(MediaCapture media, MediaFrameReader? reader)
+    private async Task ReleaseFailedStartAsync(MediaCapture media, MediaFrameReader? reader)
     {
+        await LeaveWindowThreadAsync().ConfigureAwait(false);
         try
         {
             if (reader != null)
             {
                 reader.FrameArrived -= OnFrameArrived;
+                var stop = reader.StopAsync().AsTask();
+                if (await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(8))).ConfigureAwait(false) != stop)
+                {
+                    _logger.LogWarning("Camera frame reader stop timed out");
+                    _captureDispose = stop.ContinueWith(
+                        _ => ReleaseFailedObjects(reader, media),
+                        CancellationToken.None,
+                        TaskContinuationOptions.None,
+                        TaskScheduler.Default);
+                    return;
+                }
+
+                await stop.ConfigureAwait(false);
                 reader.Dispose();
             }
 
+            media.Failed -= OnMediaFailed;
+            media.CameraStreamStateChanged -= OnStreamStateChanged;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Camera dispose after a failed start threw");
+        }
+
+        var captureDispose = Task.Run(() => ReleaseFailedObjects(null, media));
+        _captureDispose = captureDispose;
+        if (await Task.WhenAny(captureDispose, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false) != captureDispose)
+            _logger.LogWarning("MediaCapture dispose timed out");
+    }
+
+    private void ReleaseFailedObjects(MediaFrameReader? reader, MediaCapture media)
+    {
+        if (reader != null)
+        {
+            try
+            {
+                reader.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Camera frame reader dispose threw");
+            }
+        }
+
+        try
+        {
             media.Failed -= OnMediaFailed;
             media.CameraStreamStateChanged -= OnStreamStateChanged;
             media.Dispose();
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Camera dispose after a failed start threw");
+            _logger.LogWarning(ex, "Camera MediaCapture dispose threw");
         }
     }
 
@@ -596,12 +659,15 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         return bytes;
     }
 
-    private async Task DisposeSessionAsync()
+    private async Task<bool> DisposeSessionAsync()
     {
+        await LeaveWindowThreadAsync().ConfigureAwait(false);
+        if (_captureDispose is { IsCompleted: false })
+            return false;
+
         var session = _current;
-        _current = null;
         if (session == null)
-            return;
+            return true;
 
         try
         {
@@ -614,7 +680,20 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
             _logger.LogWarning(ex, "Camera event detach threw");
         }
 
-        await session.DisposeAsync(_logger).ConfigureAwait(true);
+        var released = await session.DisposeAsync(_logger, task => _captureDispose = task).ConfigureAwait(false);
+        if (!released)
+        {
+            if (!session.ReaderStopped && !session.StopInFlight)
+            {
+                session.Reader.FrameArrived += OnFrameArrived;
+                session.Capture.Failed += OnMediaFailed;
+                session.Capture.CameraStreamStateChanged += OnStreamStateChanged;
+            }
+
+            return false;
+        }
+
+        _current = null;
         lock (_bitmapGate)
         {
             _latestBitmap?.Dispose();
@@ -622,6 +701,20 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
             _lastFrameAt = 0;
             _lastCopyAt = 0;
         }
+
+        return _captureDispose is not { IsCompleted: false };
+    }
+
+    /// <summary>
+    /// A completed await stays on the caller. Camera reset starts on the window thread, so this
+    /// hops to the thread pool before any MediaCapture call.
+    /// </summary>
+    private static async Task LeaveWindowThreadAsync()
+    {
+        if (DispatcherQueue.GetForCurrentThread() == null)
+            return;
+
+        await Task.Run(() => { }).ConfigureAwait(false);
     }
 
     private Task RunOnUiAsync(Action action)
@@ -716,6 +809,12 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
     private sealed class CameraSession
     {
         private readonly MediaPlayerElement _view;
+        private int _readerStopped;
+        private int _stopInFlight;
+        private int _playerReleased;
+        private int _playerReleaseStarted;
+        private int _captureReleased;
+        private Task? _captureDispose;
 
         public CameraSession(
             MediaCapture capture,
@@ -739,54 +838,145 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         public MediaPlayer? Player { get; }
         public MediaFrameReader Reader { get; }
 
-        public async Task DisposeAsync(ILogger logger)
-        {
-            var queue = _view.DispatcherQueue;
-            if (queue != null)
-            {
-                var detached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                if (!queue.TryEnqueue(() =>
-                    {
-                        try
-                        {
-                            _view.SetMediaPlayer(null);
-                            try
-                            {
-                                Player?.Pause();
-                                Player?.Dispose();
-                            }
-                            catch (Exception ex)
-                            {
-                                logger.LogWarning(ex, "Camera player dispose threw");
-                            }
+        public bool ReaderStopped => Volatile.Read(ref _readerStopped) == 1;
 
-                            try
-                            {
-                                MediaSource?.Dispose();
-                            }
-                            catch (Exception ex)
-                            {
-                                logger.LogWarning(ex, "Camera media source dispose threw");
-                            }
-                        }
-                        finally
-                        {
-                            detached.TrySetResult();
-                        }
-                    }))
-                    detached.TrySetResult();
-                await detached.Task.ConfigureAwait(false);
+        public bool StopInFlight => Volatile.Read(ref _stopInFlight) == 1;
+
+        public async Task<bool> DisposeAsync(ILogger logger, Action<Task> trackCaptureDispose)
+        {
+            if (!await StopReaderAsync(logger).ConfigureAwait(false))
+                return false;
+
+            if (!await ReleasePlayerAsync(logger).ConfigureAwait(false))
+                return false;
+
+            DisposeReader(logger);
+            return await ReleaseCaptureAsync(logger, trackCaptureDispose).ConfigureAwait(false);
+        }
+
+        private async Task<bool> StopReaderAsync(ILogger logger)
+        {
+            if (_readerStopped == 1)
+                return true;
+
+            if (Interlocked.Exchange(ref _stopInFlight, 1) == 1)
+                return false;
+
+            var stop = Reader.StopAsync().AsTask();
+            var finished = await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(8))).ConfigureAwait(false);
+            if (finished != stop)
+            {
+                logger.LogWarning("Camera frame reader stop timed out");
+                _ = stop.ContinueWith(
+                    task =>
+                    {
+                        if (task.IsFaulted)
+                            logger.LogWarning(task.Exception, "Camera frame reader stop threw after timeout");
+                        else
+                            Volatile.Write(ref _readerStopped, 1);
+                        Interlocked.Exchange(ref _stopInFlight, 0);
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+                return false;
             }
 
             try
             {
-                await Reader.StopAsync().AsTask().ConfigureAwait(false);
+                await stop.ConfigureAwait(false);
+                Volatile.Write(ref _readerStopped, 1);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Camera frame reader stop threw");
+                Volatile.Write(ref _readerStopped, 1);
+                return true;
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _stopInFlight, 0);
+            }
+        }
+
+        private int _readerDisposed;
+
+        private void DisposeReader(ILogger logger)
+        {
+            if (Interlocked.Exchange(ref _readerDisposed, 1) == 1)
+                return;
+
+            try
+            {
                 Reader.Dispose();
             }
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Camera frame reader dispose threw");
             }
+        }
+
+        private async Task<bool> ReleasePlayerAsync(ILogger logger)
+        {
+            if (_playerReleased == 1)
+                return true;
+
+            if (Interlocked.Exchange(ref _playerReleaseStarted, 1) == 1)
+                return false;
+
+            var queue = _view.DispatcherQueue;
+            if (queue == null)
+            {
+                _playerReleased = 1;
+                return true;
+            }
+
+            var detached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!queue.TryEnqueue(() =>
+                {
+                    try
+                    {
+                        _view.SetMediaPlayer(null);
+                        if (Player != null)
+                        {
+                            Player.Pause();
+                            Player.Source = null;
+                            Player.Dispose();
+                        }
+
+                        MediaSource?.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Camera player dispose threw");
+                    }
+                    finally
+                    {
+                        _playerReleased = 1;
+                        detached.TrySetResult();
+                    }
+                }))
+            {
+                _playerReleased = 1;
+                return true;
+            }
+
+            var finished = await Task.WhenAny(detached.Task, Task.Delay(TimeSpan.FromSeconds(2))).ConfigureAwait(false);
+            if (finished == detached.Task)
+                return true;
+
+            logger.LogWarning("Camera player detach timed out");
+            return false;
+        }
+
+        private async Task<bool> ReleaseCaptureAsync(ILogger logger, Action<Task> trackCaptureDispose)
+        {
+            if (_captureReleased == 1)
+                return true;
+
+            if (_captureDispose is { IsCompleted: false })
+                return false;
 
             var capture = Capture;
             var disposed = Task.Run(() =>
@@ -800,9 +990,27 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
                     logger.LogWarning(ex, "Camera MediaCapture dispose threw");
                 }
             });
+            trackCaptureDispose(disposed);
+            _captureDispose = disposed;
             var finished = await Task.WhenAny(disposed, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
             if (finished != disposed)
+            {
                 logger.LogWarning("MediaCapture dispose timed out");
+                _ = disposed.ContinueWith(
+                    task =>
+                    {
+                        _captureReleased = 1;
+                        if (task.IsFaulted)
+                            logger.LogWarning(task.Exception, "Camera MediaCapture dispose threw after timeout");
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+                return false;
+            }
+
+            _captureReleased = 1;
+            return true;
         }
     }
 }

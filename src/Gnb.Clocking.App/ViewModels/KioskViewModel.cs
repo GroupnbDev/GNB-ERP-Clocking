@@ -361,7 +361,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         try
         {
             // The rebuild returns once a session is opened or given up on; only a frame proves the camera is back.
-            var budget = TimeSpan.FromSeconds(15);
+            var budget = TimeSpan.FromSeconds(30);
             await _camera.RebuildAsync("manual").WaitAsync(budget);
             var remaining = budget - Stopwatch.GetElapsedTime(started);
             if (!await WaitForLiveAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero))
