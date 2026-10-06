@@ -57,6 +57,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
     private long _sessionStartedAt;
     private int _startAttempt;
     private int _closed;
+    private int _skipSharedPreview;
     private Task? _rebuild;
     private DispatcherQueueTimer? _watchdog;
     private CameraStreamState _streamState = CameraStreamState.Streaming;
@@ -174,7 +175,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         await _session.WaitAsync().ConfigureAwait(true);
         try
         {
-            SetHealth(trigger == "start" ? CameraHealth.Starting : CameraHealth.Recovering, null);
+            await RunOnUiAsync(() => SetHealth(trigger == "start" ? CameraHealth.Starting : CameraHealth.Recovering, null)).ConfigureAwait(false);
             _logger.LogInformation("Camera rebuild trigger {Trigger}", trigger);
             await DisposeSessionAsync().ConfigureAwait(true);
             var opened = await StartSessionAsync().ConfigureAwait(true);
@@ -192,7 +193,15 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         catch (Exception ex)
         {
             _logger.LogError(ex, "Camera rebuild trigger {Trigger} threw", trigger);
-            SetHealth(CameraHealth.Unavailable, "Camera unavailable — retrying");
+            try
+            {
+                await RunOnUiAsync(() => SetHealth(CameraHealth.Unavailable, "Camera unavailable — retrying")).ConfigureAwait(false);
+            }
+            catch (Exception healthEx)
+            {
+                _logger.LogWarning(healthEx, "Camera status update failed");
+            }
+
             ScheduleRetry();
         }
         finally
@@ -259,32 +268,69 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
             MediaPlayer? player = null;
             MediaSource? mediaSource = null;
             var shared = false;
-            try
+            // MediaPlayer and the preview control are bound to the window thread. Creating or
+            // disposing them anywhere else closes the process right after "Camera reconnecting…".
+            await RunOnUiAsync(() =>
             {
-                mediaSource = MediaSource.CreateFromMediaFrameSource(source);
-                player = new MediaPlayer
+                if (_skipSharedPreview == 1)
                 {
-                    RealTimePlayback = true,
-                    AutoPlay = false,
-                    Source = mediaSource
-                };
-                view.SetMediaPlayer(player);
-                player.Play();
-                if (_frameView != null)
-                    _frameView.Visibility = Visibility.Collapsed;
-                shared = true;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Camera frame reader and preview cannot share a source; painting frames instead");
-                player?.Dispose();
-                mediaSource?.Dispose();
-                player = null;
-                mediaSource = null;
-                view.SetMediaPlayer(null);
-                if (_frameView != null)
-                    _frameView.Visibility = Visibility.Visible;
-            }
+                    if (_frameView != null)
+                        _frameView.Visibility = Visibility.Visible;
+                    return;
+                }
+
+                try
+                {
+                    mediaSource = MediaSource.CreateFromMediaFrameSource(source);
+                    player = new MediaPlayer
+                    {
+                        RealTimePlayback = true,
+                        AutoPlay = false,
+                        Source = mediaSource
+                    };
+                    view.SetMediaPlayer(player);
+                    player.Play();
+                    if (_frameView != null)
+                        _frameView.Visibility = Visibility.Collapsed;
+                    shared = true;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Camera frame reader and preview cannot share a source; painting frames instead");
+                    _skipSharedPreview = 1;
+                    try
+                    {
+                        view.SetMediaPlayer(null);
+                    }
+                    catch (Exception detachEx)
+                    {
+                        _logger.LogWarning(detachEx, "Camera preview detach threw");
+                    }
+
+                    try
+                    {
+                        player?.Dispose();
+                    }
+                    catch (Exception disposeEx)
+                    {
+                        _logger.LogWarning(disposeEx, "Camera player dispose threw");
+                    }
+
+                    try
+                    {
+                        mediaSource?.Dispose();
+                    }
+                    catch (Exception disposeEx)
+                    {
+                        _logger.LogWarning(disposeEx, "Camera media source dispose threw");
+                    }
+
+                    player = null;
+                    mediaSource = null;
+                    if (_frameView != null)
+                        _frameView.Visibility = Visibility.Visible;
+                }
+            }).ConfigureAwait(false);
 
             media.Failed += OnMediaFailed;
             media.CameraStreamStateChanged += OnStreamStateChanged;
@@ -300,15 +346,14 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         {
             _logger.LogError(ex, "Camera permission denied");
             ReleaseFailedStart(media, reader);
-            SetHealth(CameraHealth.Unavailable, "Allow camera access to save clock photos.");
+            await RunOnUiAsync(() => SetHealth(CameraHealth.Unavailable, "Allow camera access to save clock photos.")).ConfigureAwait(false);
             return false;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Camera start failed");
             ReleaseFailedStart(media, reader);
-
-            SetHealth(CameraHealth.Unavailable, "Camera unavailable — retrying");
+            await RunOnUiAsync(() => SetHealth(CameraHealth.Unavailable, "Camera unavailable — retrying")).ConfigureAwait(false);
             return false;
         }
     }
@@ -340,6 +385,8 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
             return;
 
         _logger.LogError("MediaCapture failed {Code} {Message}", args.Code, args.Message);
+        if (_current?.Player != null)
+            _skipSharedPreview = 1;
         _ = RebuildAsync("failed");
     }
 
@@ -353,6 +400,8 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         _logger.LogInformation("Camera stream state {State}", state);
         if (state == CameraStreamState.Shutdown)
         {
+            if (_current?.Player != null)
+                _skipSharedPreview = 1;
             _ = RebuildAsync("stream-state");
             return;
         }
@@ -575,6 +624,33 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         }
     }
 
+    private Task RunOnUiAsync(Action action)
+    {
+        var queue = _playerView?.DispatcherQueue ?? PlatformView?.DispatcherQueue;
+        if (queue == null || queue.HasThreadAccess)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!queue.TryEnqueue(() =>
+            {
+                try
+                {
+                    action();
+                    done.TrySetResult();
+                }
+                catch (Exception ex)
+                {
+                    done.TrySetException(ex);
+                }
+            }))
+            done.TrySetException(new InvalidOperationException("The camera preview could not be updated on the window thread."));
+
+        return done.Task;
+    }
+
     private void SetHealth(CameraHealth health, string? unavailableMessage)
     {
         _health = health;
@@ -674,6 +750,24 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
                         try
                         {
                             _view.SetMediaPlayer(null);
+                            try
+                            {
+                                Player?.Pause();
+                                Player?.Dispose();
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogWarning(ex, "Camera player dispose threw");
+                            }
+
+                            try
+                            {
+                                MediaSource?.Dispose();
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogWarning(ex, "Camera media source dispose threw");
+                            }
                         }
                         finally
                         {
@@ -682,25 +776,6 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
                     }))
                     detached.TrySetResult();
                 await detached.Task.ConfigureAwait(false);
-            }
-
-            try
-            {
-                Player?.Pause();
-                Player?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Camera player dispose threw");
-            }
-
-            try
-            {
-                MediaSource?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Camera media source dispose threw");
             }
 
             try

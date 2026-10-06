@@ -22,6 +22,8 @@ public partial class App : MauiWinUIApplication
 		UnhandledException += (_, args) =>
 		{
 			KioskLog.Create<App>().LogCritical(args.Exception, "WinUI unhandled exception");
+			// A camera fault must not close the kiosk. The preview retries on its own.
+			args.Handled = true;
 		};
 	}
 
