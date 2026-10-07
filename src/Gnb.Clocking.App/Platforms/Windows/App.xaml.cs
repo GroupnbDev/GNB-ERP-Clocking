@@ -1,4 +1,5 @@
-﻿using Microsoft.UI.Xaml;
+﻿using Microsoft.Extensions.Logging;
+using Microsoft.UI.Xaml;
 using Gnb.Clocking.App.Diagnostics;
 using Gnb.Clocking.App.Platforms.Windows;
 

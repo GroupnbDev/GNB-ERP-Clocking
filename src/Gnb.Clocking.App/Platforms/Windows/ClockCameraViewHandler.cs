@@ -65,7 +65,10 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
     private long _recycledSessionAt;
     private Task? _rebuild;
     private Task? _captureDispose;
+    private DispatcherQueue? _uiQueue;
     private DispatcherQueueTimer? _watchdog;
+    private int _paintPreview;
+    private int _loggedFrameFormat;
     private CameraStreamState _streamState = CameraStreamState.Streaming;
     private long _leftStreamingAt;
     private CameraHealth _health = CameraHealth.Starting;
@@ -103,6 +106,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
     {
         base.ConnectHandler(platformView);
         var queue = platformView.DispatcherQueue;
+        _uiQueue = queue;
         _watchdog = queue.CreateTimer();
         _watchdog.Interval = TimeSpan.FromSeconds(1);
         _watchdog.Tick += (_, _) => OnWatchdog();
@@ -115,6 +119,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
     protected override void DisconnectHandler(WinGrid platformView)
     {
         _closed = 1;
+        Volatile.Write(ref _paintPreview, 0);
         _watchdog?.Stop();
         _ = DisposeSessionAsync();
         base.DisconnectHandler(platformView);
@@ -299,8 +304,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
             {
                 if (_skipSharedPreview == 1)
                 {
-                    if (_frameView != null)
-                        _frameView.Visibility = Visibility.Visible;
+                    SetReaderPreview(true);
                     return;
                 }
 
@@ -315,8 +319,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
                     };
                     view.SetMediaPlayer(player);
                     player.Play();
-                    if (_frameView != null)
-                        _frameView.Visibility = Visibility.Collapsed;
+                    SetReaderPreview(false);
                     shared = true;
                 }
                 catch (Exception ex)
@@ -352,8 +355,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
 
                     player = null;
                     mediaSource = null;
-                    if (_frameView != null)
-                        _frameView.Visibility = Visibility.Visible;
+                    SetReaderPreview(true);
                 }
             }).ConfigureAwait(false);
 
@@ -508,7 +510,15 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
                 return;
 
             _lastCopyAt = now;
-            var copy = SoftwareBitmap.Convert(bitmap, BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+            if (Interlocked.Exchange(ref _loggedFrameFormat, 1) == 0)
+                _logger.LogInformation(
+                    "Camera frame {Format} alpha {Alpha} {Width}x{Height}",
+                    bitmap.BitmapPixelFormat,
+                    bitmap.BitmapAlphaMode,
+                    bitmap.PixelWidth,
+                    bitmap.PixelHeight);
+
+            var copy = CopyForDisplay(bitmap);
             SoftwareBitmap? previous;
             lock (_bitmapGate)
             {
@@ -517,7 +527,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
             }
 
             previous?.Dispose();
-            if (_frameView?.Visibility == Visibility.Visible)
+            if (Volatile.Read(ref _paintPreview) == 1)
                 QueuePreview();
         }
         catch (Exception ex)
@@ -526,13 +536,37 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         }
     }
 
+    /// <summary>
+    /// Frame callbacks are not on the window thread. <see cref="UIElement.Visibility"/> throws
+    /// RPC_E_WRONG_THREAD there, which was dropping every picture and leaving the well black.
+    /// </summary>
+    private void SetReaderPreview(bool paint)
+    {
+        Volatile.Write(ref _paintPreview, paint ? 1 : 0);
+        if (_frameView != null)
+            _frameView.Visibility = paint ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// A straight-alpha webcam frame often has alpha 0. Converting that to premultiplied
+    /// multiplies the color by 0, so the preview and the saved photo are black.
+    /// </summary>
+    private static SoftwareBitmap CopyForDisplay(SoftwareBitmap bitmap)
+    {
+        if (bitmap.BitmapPixelFormat == BitmapPixelFormat.Bgra8
+            && bitmap.BitmapAlphaMode is BitmapAlphaMode.Premultiplied or BitmapAlphaMode.Ignore)
+            return SoftwareBitmap.Copy(bitmap);
+
+        return SoftwareBitmap.Convert(bitmap, BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore);
+    }
+
     private void QueuePreview()
     {
         var now = Stopwatch.GetTimestamp();
         if (_lastPreviewAt != 0 && Stopwatch.GetElapsedTime(_lastPreviewAt, now) < PreviewInterval)
             return;
 
-        var queue = PlatformView?.DispatcherQueue;
+        var queue = _uiQueue;
         if (queue == null)
             return;
 
@@ -596,12 +630,12 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
             lock (_bitmapGate)
                 more = _pendingPreview != null;
 
-            if (!more || _closed == 1 || Interlocked.CompareExchange(ref _paintQueued, 1, 0) != 0)
-                return;
-
-            var queue = PlatformView?.DispatcherQueue;
-            if (queue == null || !queue.TryEnqueue(PaintQueuedFrame))
-                Interlocked.Exchange(ref _paintQueued, 0);
+            if (more && _closed != 1 && Interlocked.CompareExchange(ref _paintQueued, 1, 0) == 0)
+            {
+                var queue = _uiQueue;
+                if (queue == null || !queue.TryEnqueue(PaintQueuedFrame))
+                    Interlocked.Exchange(ref _paintQueued, 0);
+            }
         }
     }
 

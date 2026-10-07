@@ -172,7 +172,10 @@ public partial class KioskPage : ContentPage
         Halo.Resume();
         StartAmbient();
         FocusBadge();
-        _ = _camera.RebuildAsync("window-resumed");
+        // WinUI raises this on every activation, paired with Window Activated. A live preview
+        // stays up; display-on, resume, and the stall watchdog already rebuild a dead camera.
+        if (_camera.Health != CameraHealth.Live)
+            _ = _camera.RebuildAsync("window-resumed");
     }
 
     private void OnWindowActivated(object? sender, EventArgs e)
