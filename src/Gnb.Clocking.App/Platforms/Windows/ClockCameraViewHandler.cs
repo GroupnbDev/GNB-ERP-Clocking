@@ -26,9 +26,9 @@ using WinGrid = Microsoft.UI.Xaml.Controls.Grid;
 
 namespace Gnb.Clocking.App.Platforms.Windows;
 
-// WinUI 3 never got CaptureElement. The preview is a MediaPlayerElement on the color frame source
-// when the webcam allows a reader and a player to share it, otherwise the reader's frames painted
-// onto an Image. The photo always comes from the newest reader frame, never a frozen player picture.
+// WinUI 3 never got CaptureElement. The preview is the frame reader's pictures painted onto an
+// Image. A MediaPlayer on that same source is what older laptop drivers use to close the process
+// after about an hour. The photo always comes from the newest reader frame.
 public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid>, IClockCameraHandler
 {
     public static IPropertyMapper<ClockCameraView, WinClockCameraHandler> PropertyMapper =
@@ -57,7 +57,12 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
     private long _sessionStartedAt;
     private int _startAttempt;
     private int _closed;
-    private int _skipSharedPreview;
+    // Sharing the webcam with a MediaPlayer as well as the frame reader is what older drivers
+    // kill after about an hour, and that takes the whole kiosk with it. Paint the reader frames.
+    private int _skipSharedPreview = 1;
+    private int _paintQueued;
+    private SoftwareBitmap? _pendingPreview;
+    private long _recycledSessionAt;
     private Task? _rebuild;
     private Task? _captureDispose;
     private DispatcherQueueTimer? _watchdog;
@@ -102,6 +107,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         _watchdog.Interval = TimeSpan.FromSeconds(1);
         _watchdog.Tick += (_, _) => OnWatchdog();
         _watchdog.Start();
+        KioskStayAwake.Hold();
         CameraPowerSignals.Attach(RebuildAsync, () => Health);
         _ = RebuildAsync("start");
     }
@@ -512,7 +518,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
 
             previous?.Dispose();
             if (_frameView?.Visibility == Visibility.Visible)
-                PaintFrame();
+                QueuePreview();
         }
         catch (Exception ex)
         {
@@ -520,54 +526,103 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         }
     }
 
-    private void PaintFrame()
+    private void QueuePreview()
     {
         var now = Stopwatch.GetTimestamp();
         if (_lastPreviewAt != 0 && Stopwatch.GetElapsedTime(_lastPreviewAt, now) < PreviewInterval)
             return;
 
-        _lastPreviewAt = now;
         var queue = PlatformView?.DispatcherQueue;
         if (queue == null)
             return;
 
-        SoftwareBitmap? preview;
         lock (_bitmapGate)
-            preview = _latestBitmap == null ? null : SoftwareBitmap.Copy(_latestBitmap);
+        {
+            var copy = _latestBitmap == null ? null : SoftwareBitmap.Copy(_latestBitmap);
+            if (copy == null)
+                return;
 
-        if (preview == null)
+            var dropped = _pendingPreview;
+            _pendingPreview = copy;
+            dropped?.Dispose();
+        }
+
+        _lastPreviewAt = now;
+        if (Interlocked.CompareExchange(ref _paintQueued, 1, 0) != 0)
             return;
 
-        queue.TryEnqueue(async () =>
+        if (!queue.TryEnqueue(PaintQueuedFrame))
+            Interlocked.Exchange(ref _paintQueued, 0);
+    }
+
+    private async void PaintQueuedFrame()
+    {
+        SoftwareBitmap? bitmap = null;
+        try
         {
+            lock (_bitmapGate)
+            {
+                bitmap = _pendingPreview;
+                _pendingPreview = null;
+            }
+
+            if (bitmap == null || _frameView == null)
+                return;
+
+            SoftwareBitmapSource? source = new SoftwareBitmapSource();
             try
             {
-                if (_frameView == null)
-                    return;
-
-                var source = new SoftwareBitmapSource();
-                await source.SetBitmapAsync(preview);
+                await source.SetBitmapAsync(bitmap);
                 _frameView.Source = source;
-                // Each source holds native pixels; 15 a second for days adds up if they wait for the GC.
                 var shown = _shownPreview;
                 _shownPreview = source;
+                source = null;
                 shown?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Camera preview paint failed");
             }
             finally
             {
-                preview.Dispose();
+                source?.Dispose();
             }
-        });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Camera preview paint failed");
+        }
+        finally
+        {
+            bitmap?.Dispose();
+            Interlocked.Exchange(ref _paintQueued, 0);
+            bool more;
+            lock (_bitmapGate)
+                more = _pendingPreview != null;
+
+            if (!more || _closed == 1 || Interlocked.CompareExchange(ref _paintQueued, 1, 0) != 0)
+                return;
+
+            var queue = PlatformView?.DispatcherQueue;
+            if (queue == null || !queue.TryEnqueue(PaintQueuedFrame))
+                Interlocked.Exchange(ref _paintQueued, 0);
+        }
     }
 
     private void OnWatchdog()
     {
+        KioskStayAwake.Hold();
         if (_closed == 1 || _current == null)
             return;
+
+        if (Health == CameraHealth.Live
+            && _sessionStartedAt != 0
+            && _recycledSessionAt != _sessionStartedAt
+            && CameraRecoveryPolicy.IsSessionRecycleDue(
+                Stopwatch.GetElapsedTime(_sessionStartedAt),
+                busy: _session.CurrentCount == 0))
+        {
+            _recycledSessionAt = _sessionStartedAt;
+            _logger.LogInformation("Recycling the camera session so the kiosk can stay open");
+            _ = RebuildAsync("session-age");
+            return;
+        }
 
         var stallMs = CameraSettingsAccess.StallMilliseconds;
         var frameAge = _lastFrameAt == 0 ? long.MaxValue : FrameAgeMs();
@@ -698,6 +753,8 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         {
             _latestBitmap?.Dispose();
             _latestBitmap = null;
+            _pendingPreview?.Dispose();
+            _pendingPreview = null;
             _lastFrameAt = 0;
             _lastCopyAt = 0;
         }

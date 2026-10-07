@@ -42,6 +42,7 @@ public static class MauiProgram
 #if WINDOWS
 				events.AddWindows(windows => windows.OnWindowCreated(window =>
 				{
+					KioskStayAwake.Hold();
 					FullScreenToggle.Attach(window);
 					BadgeEntrySetup.AttachWindow(window);
 				}));

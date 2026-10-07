@@ -6,6 +6,20 @@ namespace Gnb.Clocking.Application.Clocking;
 /// </summary>
 public static class CameraRecoveryPolicy
 {
+    /// <summary>
+    /// How long one camera session may run before it is replaced. Webcam drivers on older laptops
+    /// drop the process around the hour mark if the same session is left open.
+    /// </summary>
+    public static readonly TimeSpan SessionRecycleAfter = TimeSpan.FromMinutes(50);
+
+    public static bool IsSessionRecycleDue(TimeSpan sessionAge, bool busy)
+    {
+        if (busy)
+            return false;
+
+        return sessionAge >= SessionRecycleAfter;
+    }
+
     public static TimeSpan NextDelay(int attempt)
     {
         if (attempt <= 1)

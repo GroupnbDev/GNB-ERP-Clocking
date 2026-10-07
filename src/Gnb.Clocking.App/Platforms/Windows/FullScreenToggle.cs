@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Input;
@@ -37,8 +38,22 @@ public static class FullScreenToggle
 
     private static void Hook(Microsoft.UI.Xaml.Window window, UIElement root)
     {
+        window.AppWindow.Closing += (_, args) =>
+        {
+            if (KioskSupervisor.Stopping || KioskSupervisor.IsWindowsShuttingDown())
+                return;
+
+            args.Cancel = true;
+        };
         root.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler((_, args) =>
         {
+            if (args.Key == VirtualKey.Q && IsDown(0x11) && IsDown(0x10))
+            {
+                args.Handled = true;
+                KioskSupervisor.RequestStop();
+                return;
+            }
+
             if (args.Key == VirtualKey.F5)
             {
                 ResetCameraRequested?.Invoke();
@@ -64,4 +79,9 @@ public static class FullScreenToggle
 
         appWindow.SetPresenter(target);
     }
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int virtualKey);
+
+    private static bool IsDown(int virtualKey) => (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
 }

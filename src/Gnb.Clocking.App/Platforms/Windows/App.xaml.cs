@@ -1,6 +1,6 @@
 ﻿using Microsoft.UI.Xaml;
 using Gnb.Clocking.App.Diagnostics;
-using Microsoft.Extensions.Logging;
+using Gnb.Clocking.App.Platforms.Windows;
 
 // To learn more about WinUI, the WinUI project structure,
 // and more about our project templates, see: http://aka.ms/winui-project-info.
@@ -18,12 +18,26 @@ public partial class App : MauiWinUIApplication
 	/// </summary>
 	public App()
 	{
+		if (KioskSupervisor.WatchIfSupervisor())
+			return;
+
+		KioskSupervisor.SuppressCrashDialog();
+		KioskSupervisor.EnsureWatchingThisProcess();
 		this.InitializeComponent();
 		UnhandledException += (_, args) =>
 		{
-			KioskLog.Create<App>().LogCritical(args.Exception, "WinUI unhandled exception");
-			// A camera fault must not close the kiosk. The preview retries on its own.
+			// Mark it handled before logging. WinUI still closes the process if this flag is set
+			// after the exception object is left unread, or if logging throws first.
 			args.Handled = true;
+			var error = args.Exception;
+			try
+			{
+				KioskLog.Create<App>().LogCritical(error, "WinUI unhandled exception");
+			}
+			catch (Exception)
+			{
+				// The kiosk stays up even when the log file cannot be written.
+			}
 		};
 	}
 

@@ -39,7 +39,7 @@ dotnet run --project src\Gnb.Clocking.App -f net9.0-windows10.0.19041.0
 
 ## Publish
 
-Close the app first, otherwise the exe can't be overwritten.
+Close the app first (Ctrl+Shift+Q), otherwise the exe can't be overwritten. The kiosk also keeps a hidden watcher running; that key stops both.
 
 ```powershell
 dotnet publish src\Gnb.Clocking.App\Gnb.Clocking.App.csproj -f net9.0-windows10.0.19041.0 -c Release -r win-x64 --self-contained true
@@ -59,6 +59,7 @@ To install on another kiosk PC, copy the whole `publish\kiosk` folder.
 | --- | ------------------ |
 | F11 | Toggle full screen |
 | F5  | Reset camera       |
+| Ctrl+Shift+Q | Stop the kiosk so it can be updated |
 
 ## Tests
 
