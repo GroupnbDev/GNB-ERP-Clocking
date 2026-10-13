@@ -32,6 +32,8 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSAppSleepDisabled</key>
+	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>GroupNB Clock takes a photo each time a badge clocks in or out.</string>
 	<key>NSAppTransportSecurity</key>

@@ -11,10 +11,21 @@ internal static class KioskStayAwake
     private const uint EsContinuous = 0x80000000;
     private const uint EsSystemRequired = 0x00000001;
     private const uint EsDisplayRequired = 0x00000002;
+    private static int _refusedLogged;
 
     public static void Hold()
     {
-        _ = SetThreadExecutionState(EsContinuous | EsSystemRequired | EsDisplayRequired);
+        var previous = SetThreadExecutionState(EsContinuous | EsSystemRequired | EsDisplayRequired);
+        if (previous == 0)
+        {
+            if (Interlocked.Exchange(ref _refusedLogged, 1) == 0)
+                KioskSupervisor.Note("display stay-awake was refused");
+        }
+        else
+        {
+            Interlocked.Exchange(ref _refusedLogged, 0);
+        }
+
         KioskSupervisor.EnsureWatchingThisProcess();
     }
 

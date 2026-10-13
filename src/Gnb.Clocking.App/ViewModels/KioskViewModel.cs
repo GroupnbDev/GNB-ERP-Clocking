@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using Gnb.Clocking.App.Configuration;
+using Gnb.Clocking.App.Diagnostics;
 using Gnb.Clocking.Application.Clocking;
 using Gnb.Clocking.Domain.Clocking;
 using Gnb.Clocking.Infrastructure.ClockKiosk;
@@ -222,7 +223,15 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         _started = true;
         Microsoft.Maui.Controls.Application.Current?.Dispatcher.StartTimer(TimeSpan.FromSeconds(1), () =>
         {
-            Tick();
+            try
+            {
+                Tick();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Clock tick skipped");
+            }
+
             return true;
         });
 
@@ -233,9 +242,13 @@ public sealed class KioskViewModel : INotifyPropertyChanged
                 _ = RefreshPunchesAsync();
             return true;
         });
+        KioskHealth.Log(_logger);
+        var minutes = 0;
         Microsoft.Maui.Controls.Application.Current?.Dispatcher.StartTimer(TimeSpan.FromSeconds(60), () =>
         {
             _ = MaybeDailyRebuildAsync();
+            if (++minutes % 5 == 0)
+                KioskHealth.Log(_logger);
             return true;
         });
     }

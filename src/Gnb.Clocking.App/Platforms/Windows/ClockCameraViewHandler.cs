@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Gnb.Clocking.App.Camera;
 using Gnb.Clocking.App.Configuration;
+using Gnb.Clocking.App.Controls;
 using Gnb.Clocking.App.Diagnostics;
 using Gnb.Clocking.Application.Clocking;
 using Microsoft.Extensions.Logging;
@@ -34,11 +35,16 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
     public static IPropertyMapper<ClockCameraView, WinClockCameraHandler> PropertyMapper =
         new PropertyMapper<ClockCameraView, WinClockCameraHandler>(ViewMapper);
 
-    private const uint MaxHeight = 480;
-    private const uint PhotoMaxEdge = 640;
-    private const double JpegQuality = 0.5;
+    private const uint MaxHeight = CameraFormatPolicy.MaxHeight;
+    private const uint PhotoMaxEdge = (uint)ClockPhotoEncode.MaxLongEdge;
+    private const double JpegQuality = ClockPhotoEncode.JpegQuality;
     private const double MaxFrameRate = 30;
-    private static readonly TimeSpan PreviewInterval = TimeSpan.FromSeconds(1.0 / 15);
+    private static readonly TimeSpan FullPreviewInterval = TimeSpan.FromSeconds(1.0 / 15);
+    private static readonly TimeSpan LitePreviewInterval = TimeSpan.FromSeconds(1.0 / 10);
+    private static readonly TimeSpan DropLogInterval = TimeSpan.FromMinutes(1);
+
+    // Weak laptops paint 10 fps; a photo still only needs a frame newer than CameraMaxPhotoAgeMs.
+    private static TimeSpan PreviewInterval => MotionSettings.IsLite ? LitePreviewInterval : FullPreviewInterval;
 
     private readonly ILogger<WinClockCameraHandler> _logger = KioskLog.Create<WinClockCameraHandler>();
     private readonly SemaphoreSlim _session = new(1, 1);
@@ -69,6 +75,8 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
     private DispatcherQueueTimer? _watchdog;
     private int _paintPreview;
     private int _loggedFrameFormat;
+    private long _lastDropLogAt;
+    private int _droppedFrames;
     private CameraStreamState _streamState = CameraStreamState.Streaming;
     private long _leftStreamingAt;
     private CameraHealth _health = CameraHealth.Starting;
@@ -281,12 +289,17 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
                 MemoryPreference = MediaCaptureMemoryPreference.Cpu
             }).AsTask().ConfigureAwait(true);
 
-            var format = await UseLightPreviewAsync(media).ConfigureAwait(true);
-            if (format != null)
-                _logger.LogInformation("Camera preview format {Width}x{Height}", format.Width, format.Height);
-
             var source = FindColorFrameSource(media)
                 ?? throw new ClockingException("No video preview or record stream found.");
+
+            // The reader converts every frame to BGRA on the CPU, so its own source must run small.
+            // Setting only the preview stream left some webcams at their 720p/1080p default.
+            if (!await UseLightReaderFormatAsync(source).ConfigureAwait(true))
+            {
+                var format = await UseLightPreviewAsync(media).ConfigureAwait(true);
+                if (format != null)
+                    _logger.LogInformation("Camera preview format {Width}x{Height}", format.Width, format.Height);
+            }
 
             reader = await media.CreateFrameReaderAsync(source, MediaEncodingSubtypes.Bgra8).AsTask().ConfigureAwait(true);
             reader.AcquisitionMode = MediaFrameReaderAcquisitionMode.Realtime;
@@ -365,6 +378,7 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
             _leftStreamingAt = 0;
             _lastFrameAt = 0;
             _sessionStartedAt = Stopwatch.GetTimestamp();
+            KioskHealth.CameraSessionStarted();
             _current = new CameraSession(media, source, mediaSource, player, reader, view);
             _logger.LogInformation("Camera frame reader sharing {Mode}", shared ? "shared" : "preview-from-reader");
             return true;
@@ -492,7 +506,9 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         try
         {
             using var frame = sender.TryAcquireLatestFrame();
-            var bitmap = frame?.VideoMediaFrame?.SoftwareBitmap;
+            // Each read of SoftwareBitmap hands back a new native-backed bitmap. Left to the GC at
+            // 30 fps it piles up native memory until the process dies, so release it every frame.
+            using var bitmap = frame?.VideoMediaFrame?.SoftwareBitmap;
             if (bitmap == null)
                 return;
 
@@ -532,8 +548,23 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Camera frame was dropped");
+            LogDroppedFrame(ex);
         }
+    }
+
+    /// <summary>At most one warning (with the stack) per minute; the rest are counted into it.</summary>
+    private void LogDroppedFrame(Exception ex)
+    {
+        var dropped = Interlocked.Increment(ref _droppedFrames);
+        var now = Stopwatch.GetTimestamp();
+        var last = Interlocked.Read(ref _lastDropLogAt);
+        if (last != 0 && Stopwatch.GetElapsedTime(last, now) < DropLogInterval)
+            return;
+        if (Interlocked.CompareExchange(ref _lastDropLogAt, now, last) != last)
+            return;
+
+        Interlocked.Exchange(ref _droppedFrames, 0);
+        _logger.LogWarning(ex, "Camera frame was dropped ({Dropped} since the last warning)", dropped);
     }
 
     /// <summary>
@@ -867,6 +898,42 @@ public sealed class WinClockCameraHandler : ViewHandler<ClockCameraView, WinGrid
         return media.FrameSources.Values.FirstOrDefault(source =>
             source.Info.MediaStreamType == MediaStreamType.VideoRecord
             && source.Info.SourceKind == MediaFrameSourceKind.Color);
+    }
+
+    private async Task<bool> UseLightReaderFormatAsync(MediaFrameSource source)
+    {
+        try
+        {
+            var formats = source.SupportedFormats
+                .Where(format => format.VideoFormat != null)
+                .ToList();
+            var choice = CameraFormatPolicy.Choose(formats.Select(ToOption));
+            if (choice == null)
+                return false;
+
+            var chosen = formats.First(format => ToOption(format) == choice);
+            await source.SetFormatAsync(chosen).AsTask().ConfigureAwait(true);
+            _logger.LogInformation(
+                "Camera reader format {Width}x{Height} {Fps:0.#} fps {Subtype}",
+                choice.Width,
+                choice.Height,
+                choice.FrameRate,
+                choice.Subtype);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Camera reader format could not be set; using the preview stream format");
+            return false;
+        }
+    }
+
+    private static CameraFormatOption ToOption(MediaFrameFormat format)
+    {
+        var rate = format.FrameRate is { Denominator: > 0 } fraction
+            ? fraction.Numerator / (double)fraction.Denominator
+            : 0;
+        return new CameraFormatOption(format.VideoFormat.Width, format.VideoFormat.Height, rate, format.Subtype ?? "");
     }
 
     private static async Task<VideoEncodingProperties?> UseLightPreviewAsync(MediaCapture media)

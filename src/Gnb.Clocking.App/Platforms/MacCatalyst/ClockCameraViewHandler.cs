@@ -254,8 +254,8 @@ sealed class JpegPhotoDelegate : AVCapturePhotoCaptureDelegate
         }
 
         using var image = UIImage.LoadFromData(data);
-        using var fitted = ScaleDown(image, 640);
-        using var jpeg = (fitted ?? image)?.AsJPEG(0.5f);
+        using var fitted = ScaleDown(image, ClockPhotoEncode.MaxLongEdge);
+        using var jpeg = (fitted ?? image)?.AsJPEG(ClockPhotoEncode.JpegQuality);
         _pending.TrySetResult(jpeg?.ToArray());
     }
 }

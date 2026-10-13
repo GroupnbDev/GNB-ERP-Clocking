@@ -21,6 +21,11 @@ internal static class KioskSupervisor
 
     private static readonly NativeFilterDelegate NativeFilter = OnNativeFault;
     private static Mutex? _mutex;
+    private static long _lastCheckAt;
+    private static long _lastSpawnAt;
+
+    private static TimeSpan? Since(long timestamp, long now) =>
+        timestamp == 0 ? null : Stopwatch.GetElapsedTime(timestamp, now);
 
     public static bool Stopping { get; private set; }
 
@@ -34,14 +39,27 @@ internal static class KioskSupervisor
         return true;
     }
 
+    /// <summary>
+    /// Called from start-up and every camera watchdog tick; <see cref="SupervisorSpawnPolicy"/> keeps it to a
+    /// mutex check every 30 s and at most one launch a minute, so a slow-starting watcher is not launched again.
+    /// </summary>
     public static void EnsureWatchingThisProcess()
     {
         if (Debugger.IsAttached || Environment.ProcessPath == null)
             return;
 
+        var now = Stopwatch.GetTimestamp();
+        if (!SupervisorSpawnPolicy.ShouldCheck(Since(Interlocked.Read(ref _lastCheckAt), now)))
+            return;
+
+        Interlocked.Exchange(ref _lastCheckAt, now);
         if (SupervisorIsRunning())
             return;
 
+        if (!SupervisorSpawnPolicy.MaySpawn(Since(Interlocked.Read(ref _lastSpawnAt), now)))
+            return;
+
+        Interlocked.Exchange(ref _lastSpawnAt, now);
         try
         {
             Process.Start(new ProcessStartInfo
@@ -74,6 +92,22 @@ internal static class KioskSupervisor
         }
 
         Environment.Exit(0);
+    }
+
+    /// <summary>
+    /// A new launch is a request to run. A stop file left from Ctrl+Shift+Q must not make the
+    /// watcher refuse the next crash recovery.
+    /// </summary>
+    public static void ClearStopRequest()
+    {
+        try
+        {
+            File.Delete(StopPath());
+        }
+        catch (Exception)
+        {
+            // The watcher still honors a file that could not be removed.
+        }
     }
 
     public static bool IsWindowsShuttingDown()
@@ -132,36 +166,98 @@ internal static class KioskSupervisor
         var fastExits = 0;
         while (true)
         {
-            if (IsWindowsShuttingDown())
+            if (ShouldStandDown())
             {
                 process?.Dispose();
+                TryDeleteStop();
                 return;
+            }
+
+            if (process == null || HasExited(process))
+            {
+                process?.Dispose();
+                process = StartWorker(exe, directory);
+                if (process == null)
+                {
+                    fastExits++;
+                    var delay = KioskRestartPolicy.NextDelay(TimeSpan.Zero, fastExits);
+                    AppendLog("restart failed; retry in " + delay.TotalSeconds.ToString("0", CultureInfo.InvariantCulture) + "s");
+                    if (!Pause(delay))
+                        return;
+
+                    continue;
+                }
+            }
+
+            var watchedSince = Stopwatch.GetTimestamp();
+            var killed = false;
+            while (!HasExited(process))
+            {
+                if (ShouldStandDown())
+                {
+                    process.Dispose();
+                    TryDeleteStop();
+                    return;
+                }
+
+                try
+                {
+                    if (process.WaitForExit(5_000))
+                        break;
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("wait failed: " + ex.Message);
+                    process.Dispose();
+                    process = null;
+                    break;
+                }
+
+                if (!IsUnresponsive(process))
+                    continue;
+
+                AppendLog(string.Create(CultureInfo.InvariantCulture, $"{DateTime.UtcNow:o} kiosk stopped answering; restarting"));
+                try
+                {
+                    process.Kill();
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("kill failed: " + ex.Message);
+                }
+
+                try
+                {
+                    process.WaitForExit(10_000);
+                }
+                catch (Exception)
+                {
+                    // Fall through and only relaunch when the process is actually gone.
+                }
+
+                if (!HasExited(process))
+                {
+                    AppendLog("kiosk was still running after kill");
+                    continue;
+                }
+
+                killed = true;
+                break;
             }
 
             if (process == null)
             {
-                process = StartWorker(exe, directory);
-                if (process == null)
+                if (!Pause(TimeSpan.FromSeconds(2)))
                     return;
+
+                continue;
             }
 
-            var started = Stopwatch.GetTimestamp();
-            try
-            {
-                process.WaitForExit();
-            }
-            catch (Exception ex)
-            {
-                AppendLog("wait failed: " + ex.Message);
-                process.Dispose();
-                return;
-            }
-
-            var uptime = Stopwatch.GetElapsedTime(started);
+            var uptime = ProcessUptime(process, watchedSince);
             var code = 0;
             try
             {
-                code = process.ExitCode;
+                code = killed ? -1 : process.ExitCode;
             }
             catch (Exception)
             {
@@ -170,7 +266,7 @@ internal static class KioskSupervisor
 
             process.Dispose();
             process = null;
-            if (File.Exists(StopPath()) || IsWindowsShuttingDown())
+            if (ShouldStandDown())
             {
                 AppendLog(FormLine(code, uptime, TimeSpan.Zero, stopped: true));
                 TryDeleteStop();
@@ -182,19 +278,79 @@ internal static class KioskSupervisor
             else
                 fastExits++;
 
-            var delay = KioskRestartPolicy.NextDelay(uptime, fastExits);
-            AppendLog(FormLine(code, uptime, delay, stopped: false));
-            Thread.Sleep(delay);
-            if (IsWindowsShuttingDown() || File.Exists(StopPath()))
-            {
-                TryDeleteStop();
-                return;
-            }
-
-            process = StartWorker(exe, directory);
-            if (process == null)
+            var restartDelay = KioskRestartPolicy.NextDelay(uptime, fastExits);
+            AppendLog(FormLine(code, uptime, restartDelay, stopped: false));
+            if (!Pause(restartDelay))
                 return;
         }
+    }
+
+    public static void Note(string line) => AppendLog(line);
+
+    private static bool ShouldStandDown() => IsWindowsShuttingDown() || File.Exists(StopPath());
+
+    private static bool Pause(TimeSpan delay)
+    {
+        var left = delay;
+        while (left > TimeSpan.Zero)
+        {
+            if (ShouldStandDown())
+            {
+                TryDeleteStop();
+                return false;
+            }
+
+            var slice = left > TimeSpan.FromSeconds(1) ? TimeSpan.FromSeconds(1) : left;
+            Thread.Sleep(slice);
+            left -= slice;
+        }
+
+        return !ShouldStandDown();
+    }
+
+    private static bool HasExited(Process process)
+    {
+        try
+        {
+            return process.HasExited;
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
+
+    private static bool IsUnresponsive(Process process)
+    {
+        TimeSpan uptime;
+        try
+        {
+            uptime = DateTime.UtcNow - process.StartTime.ToUniversalTime();
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        var beat = KioskHeartbeat.ReadUtc();
+        TimeSpan? age = beat == null ? null : DateTimeOffset.UtcNow - beat.Value;
+        return KioskLivenessPolicy.IsUnresponsive(uptime, age);
+    }
+
+    private static TimeSpan ProcessUptime(Process process, long watchedSince)
+    {
+        try
+        {
+            var uptime = DateTime.UtcNow - process.StartTime.ToUniversalTime();
+            if (uptime > TimeSpan.Zero)
+                return uptime;
+        }
+        catch (Exception)
+        {
+            // StartTime is unavailable for some exits. The time spent waiting is the fallback.
+        }
+
+        return Stopwatch.GetElapsedTime(watchedSince);
     }
 
     private static Process? StartWorker(string exe, string directory)

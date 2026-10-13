@@ -1,3 +1,4 @@
+using Gnb.Clocking.Application.Clocking;
 using Gnb.Clocking.Infrastructure.Photos;
 using Xunit;
 
@@ -20,6 +21,14 @@ public sealed class LocalPhotoPrunerTests : IDisposable
         var path = Path.Combine(folder, file);
         File.WriteAllBytes(path, new byte[] { 0xFF, 0xD8, 0xFF });
         return path;
+    }
+
+    [Fact]
+    public void Default_window_is_one_week()
+    {
+        Assert.Equal(7, LocalPhotoPruner.DefaultKeepDays);
+        Assert.Equal(480, ClockPhotoEncode.MaxLongEdge);
+        Assert.Equal(0.4f, ClockPhotoEncode.JpegQuality);
     }
 
     [Fact]

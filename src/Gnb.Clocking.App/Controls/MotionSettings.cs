@@ -76,7 +76,7 @@ public static class MotionSettings
     {
         try
         {
-#if MACCATALYST || IOS
+#if MACCATALYST
             return UIKit.UIAccessibility.IsReduceMotionEnabled;
 #elif WINDOWS
             return !new global::Windows.UI.ViewManagement.UISettings().AnimationsEnabled;

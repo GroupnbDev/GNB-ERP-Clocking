@@ -2,6 +2,7 @@
 using Gnb.Clocking.App.Configuration;
 using Gnb.Clocking.App.Controls;
 using Gnb.Clocking.App.Diagnostics;
+using Gnb.Clocking.Infrastructure.Diagnostics;
 using Gnb.Clocking.App.Pages;
 using Gnb.Clocking.App.Photos;
 using Gnb.Clocking.App.ViewModels;
@@ -21,6 +22,9 @@ public static class MauiProgram
 {
 	public static MauiApp CreateMauiApp()
 	{
+#if MACCATALYST
+		KioskStayAwake.Hold();
+#endif
 		var builder = MauiApp.CreateBuilder();
 		builder
 			.UseMauiApp<App>()
@@ -43,6 +47,7 @@ public static class MauiProgram
 				events.AddWindows(windows => windows.OnWindowCreated(window =>
 				{
 					KioskStayAwake.Hold();
+					KioskUiPulse.Start();
 					FullScreenToggle.Attach(window);
 					BadgeEntrySetup.AttachWindow(window);
 				}));

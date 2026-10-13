@@ -9,7 +9,7 @@ namespace Gnb.Clocking.Infrastructure.Photos;
 /// </summary>
 public static class LocalPhotoPruner
 {
-    public const int DefaultKeepDays = 14;
+    public const int DefaultKeepDays = 7;
 
     /// <returns>The number of day folders removed.</returns>
     public static int Prune(string root, int keepDays, DateTime today)

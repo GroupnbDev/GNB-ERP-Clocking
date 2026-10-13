@@ -19,11 +19,11 @@ public partial class App : MauiWinUIApplication
 	/// </summary>
 	public App()
 	{
-		if (KioskSupervisor.WatchIfSupervisor())
-			return;
-
+		// The --supervisor watcher never gets here; Program.Main runs it before WinUI starts.
 		KioskSupervisor.SuppressCrashDialog();
+		KioskSupervisor.ClearStopRequest();
 		KioskSupervisor.EnsureWatchingThisProcess();
+		KioskAutoStart.RegisterCurrentExe();
 		this.InitializeComponent();
 		UnhandledException += (_, args) =>
 		{

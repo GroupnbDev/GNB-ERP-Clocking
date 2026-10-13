@@ -1,12 +1,12 @@
-using Gnb.Clocking.App.Diagnostics;
+using Gnb.Clocking.Infrastructure.Diagnostics;
 using Gnb.Clocking.Infrastructure.Photos;
 using Microsoft.Extensions.Configuration;
 
 namespace Gnb.Clocking.App.Configuration;
 
 /// <summary>
-/// Deletes local clock-photo copies older than <c>ClockKiosk:KeepLocalPhotosDays</c> (default 14) at start-up
-/// and then daily, on a background thread, so a 256 GB kiosk disk never fills. The server keeps every photo.
+/// Deletes local clock-photo copies older than <c>ClockKiosk:KeepLocalPhotosDays</c> (default 7) at start-up
+/// and then daily, on a background thread. A week of small JPEGs is enough for the on-screen list.
 /// </summary>
 public static class PhotoHousekeeping
 {
