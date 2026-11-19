@@ -12,7 +12,7 @@ public interface IClockingService
     /// <summary>Queued punches the server refused on sync. They need a person, not another retry.</summary>
     int ParkedCount { get; }
 
-    DateTimeOffset? GetOpenClockIn(int candidateId);
+    DateTimeOffset? GetOpenClockIn(int userId);
 
     IReadOnlyList<ClockEvent> GetEvents();
 
@@ -23,10 +23,10 @@ public interface IClockingService
     Task RefreshAsync(CancellationToken cancellationToken = default);
 
     Task<ClockEvent> ClockInAsync(
-        CandidateBadge candidate,
+        StaffBadge staff,
         ClockPhoto photo,
         bool resetCompletedDay = false,
         CancellationToken cancellationToken = default);
 
-    Task<ClockEvent> ClockOutAsync(CandidateBadge candidate, ClockPhoto photo, CancellationToken cancellationToken = default);
+    Task<ClockEvent> ClockOutAsync(StaffBadge staff, ClockPhoto photo, CancellationToken cancellationToken = default);
 }

@@ -5,9 +5,9 @@ namespace Gnb.Clocking.Infrastructure.ClockKiosk;
 // Wire shapes of gnbSaasApi api/clock-kiosk (snake_case JSON).
 
 internal sealed record BadgeResponse(
-    [property: JsonPropertyName("candidate_id")] int CandidateId,
-    [property: JsonPropertyName("candidate_number")] int CandidateNumber,
-    [property: JsonPropertyName("card_number")] string? CardNumber,
+    [property: JsonPropertyName("user_id")] int UserId,
+    [property: JsonPropertyName("employee_number")] string? EmployeeNumber,
+    [property: JsonPropertyName("rfid_number")] string? RfidNumber,
     [property: JsonPropertyName("first_name")] string? FirstName,
     [property: JsonPropertyName("last_name")] string? LastName,
     [property: JsonPropertyName("rfid")] string? Rfid,
@@ -39,14 +39,14 @@ internal sealed record ClockRequest(
     [property: JsonPropertyName("device_clock_skew_seconds")] int? DeviceClockSkewSeconds = null);
 
 internal sealed record RosterResponse(
-    [property: JsonPropertyName("candidates")] List<RosterCandidate>? Candidates,
+    [property: JsonPropertyName("users")] List<RosterUser>? Users,
     [property: JsonPropertyName("server_time")] DateTimeOffset ServerTime,
     [property: JsonPropertyName("count")] int Count);
 
-internal sealed record RosterCandidate(
-    [property: JsonPropertyName("candidate_id")] int CandidateId,
-    [property: JsonPropertyName("candidate_number")] int CandidateNumber,
-    [property: JsonPropertyName("card_number")] string? CardNumber,
+internal sealed record RosterUser(
+    [property: JsonPropertyName("user_id")] int UserId,
+    [property: JsonPropertyName("employee_number")] string? EmployeeNumber,
+    [property: JsonPropertyName("rfid_number")] string? RfidNumber,
     [property: JsonPropertyName("first_name")] string? FirstName,
     [property: JsonPropertyName("last_name")] string? LastName,
     [property: JsonPropertyName("tenant_id")] int TenantId,
@@ -56,7 +56,7 @@ internal sealed record RosterCandidate(
 
 internal sealed record ClockActionResponse(
     [property: JsonPropertyName("action")] string? Action,
-    [property: JsonPropertyName("candidate_id")] int CandidateId,
+    [property: JsonPropertyName("user_id")] int UserId,
     [property: JsonPropertyName("record_id")] int RecordId,
     [property: JsonPropertyName("hours_worked")] double? HoursWorked,
     [property: JsonPropertyName("utc_time")] DateTime UtcTime,
@@ -72,10 +72,10 @@ internal sealed record SessionsResponse(
 
 internal sealed record SessionEvent(
     [property: JsonPropertyName("record_id")] int RecordId,
-    [property: JsonPropertyName("candidate_id")] int CandidateId,
+    [property: JsonPropertyName("user_id")] int UserId,
     [property: JsonPropertyName("first_name")] string? FirstName,
     [property: JsonPropertyName("last_name")] string? LastName,
-    [property: JsonPropertyName("candidate_name")] string? CandidateName,
+    [property: JsonPropertyName("user_name")] string? UserName,
     [property: JsonPropertyName("action")] string? Action,
     [property: JsonPropertyName("local_time")] DateTimeOffset LocalTime,
     [property: JsonPropertyName("assignment")] string? Assignment,
@@ -83,14 +83,14 @@ internal sealed record SessionEvent(
     [property: JsonPropertyName("photo_relative_path")] string? PhotoRelativePath);
 
 internal sealed record OpenShift(
-    [property: JsonPropertyName("candidate_id")] int CandidateId,
+    [property: JsonPropertyName("user_id")] int UserId,
     [property: JsonPropertyName("open_clock_in")] DateTimeOffset OpenClockIn);
 
 internal sealed record ApiError([property: JsonPropertyName("error")] string? Error);
 
-/// <summary>409 from the badge lookup: the card is linked, but its candidate is not Working.</summary>
-internal sealed record BadgeNotWorkingError(
+/// <summary>409 from the badge lookup: the badge is linked, but its user cannot clock yet.</summary>
+internal sealed record BadgeNotReadyError(
     [property: JsonPropertyName("error")] string? Error,
     [property: JsonPropertyName("rfid")] string? Rfid,
-    [property: JsonPropertyName("candidate_name")] string? CandidateName,
-    [property: JsonPropertyName("status")] string? Status);
+    [property: JsonPropertyName("user_name")] string? UserName,
+    [property: JsonPropertyName("detail")] string? Detail);

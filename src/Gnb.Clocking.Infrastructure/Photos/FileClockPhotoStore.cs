@@ -16,23 +16,23 @@ public sealed class FileClockPhotoStore : IClockPhotoStore
     }
 
     public async Task<ClockPhoto> SaveJpegAsync(
-        CandidateBadge candidate,
+        StaffBadge staff,
         bool isClockOut,
         DateTime referenceDate,
         ReadOnlyMemory<byte> jpeg,
         CancellationToken cancellationToken = default)
     {
-        var candidateId = candidate?.CandidateId ?? 0;
-        if (candidateId <= 0)
-            throw new ClockingException("A candidate is required for the clock photo.");
+        var userId = staff?.UserId ?? 0;
+        if (userId <= 0)
+            throw new ClockingException("A staff user is required for the clock photo.");
         if (jpeg.IsEmpty)
             throw new ClockingException("A photo is required to clock in or out.");
 
         var relative = ClockPhotoPaths.RelativePath(referenceDate, isClockOut);
         var absolute = Path.Combine(
             _root,
-            "Candidates",
-            candidateId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "Users",
+            userId.ToString(System.Globalization.CultureInfo.InvariantCulture),
             relative.Replace('/', Path.DirectorySeparatorChar));
 
         var folder = Path.GetDirectoryName(absolute);

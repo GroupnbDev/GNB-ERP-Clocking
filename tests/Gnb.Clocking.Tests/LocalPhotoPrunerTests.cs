@@ -14,9 +14,9 @@ public sealed class LocalPhotoPrunerTests : IDisposable
             Directory.Delete(_root, recursive: true);
     }
 
-    private string Photo(int candidateId, string day, string file = "ClockIN.jpeg")
+    private string Photo(int userId, string day, string file = "ClockIN.jpeg")
     {
-        var folder = Path.Combine(_root, "Candidates", candidateId.ToString(), "Records", day);
+        var folder = Path.Combine(_root, "Users", userId.ToString(), "Records", day);
         Directory.CreateDirectory(folder);
         var path = Path.Combine(folder, file);
         File.WriteAllBytes(path, new byte[] { 0xFF, 0xD8, 0xFF });
@@ -47,15 +47,13 @@ public sealed class LocalPhotoPrunerTests : IDisposable
     }
 
     [Fact]
-    public void Removes_empty_candidate_folders_and_ignores_unexpected_names()
+    public void Removes_empty_user_folders()
     {
         Photo(7, "2025-01-01");
-        var stray = Photo(8, "not-a-date");
 
         LocalPhotoPruner.Prune(_root, keepDays: 14, today: new DateTime(2026, 9, 22));
 
-        Assert.False(Directory.Exists(Path.Combine(_root, "Candidates", "7")));
-        Assert.True(File.Exists(stray));
+        Assert.False(Directory.Exists(Path.Combine(_root, "Users", "7")));
     }
 
     [Fact]
@@ -79,5 +77,45 @@ public sealed class LocalPhotoPrunerTests : IDisposable
 
         Assert.False(File.Exists(old));
         Assert.False(File.Exists(thumb));
+    }
+
+    private string ServerPhoto(string fileName, DateTime? lastWrite = null)
+    {
+        var folder = Path.Combine(_root, "Users", "7", "clock", "users", "6", "7", "2026-09");
+        Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, fileName);
+        File.WriteAllBytes(path, new byte[] { 0xFF, 0xD8, 0xFF });
+        if (lastWrite is DateTime when)
+            File.SetLastWriteTime(path, when);
+        return path;
+    }
+
+    [Fact]
+    public void Month_folder_photos_are_pruned_by_the_day_in_the_file_name()
+    {
+        var old = ServerPhoto("2026-09-01-in-0123456789abcdef.jpeg");
+        var oldThumb = ServerPhoto("2026-09-01-in-0123456789abcdef.thumb.jpeg");
+        var compact = ServerPhoto("20260902_out.jpeg");
+        var recent = ServerPhoto("2026-09-21-out-0123456789abcdef.jpeg");
+
+        var removed = LocalPhotoPruner.Prune(_root, keepDays: 14, today: new DateTime(2026, 9, 22));
+
+        Assert.Equal(3, removed);
+        Assert.False(File.Exists(old));
+        Assert.False(File.Exists(oldThumb));
+        Assert.False(File.Exists(compact));
+        Assert.True(File.Exists(recent));
+    }
+
+    [Fact]
+    public void Files_without_a_date_use_the_last_write_time()
+    {
+        var old = ServerPhoto("photo-old.jpeg", new DateTime(2026, 8, 1));
+        var recent = ServerPhoto("photo-new.jpeg", new DateTime(2026, 9, 21));
+
+        LocalPhotoPruner.Prune(_root, keepDays: 14, today: new DateTime(2026, 9, 22));
+
+        Assert.False(File.Exists(old));
+        Assert.True(File.Exists(recent));
     }
 }

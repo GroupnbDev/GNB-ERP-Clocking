@@ -5,7 +5,7 @@ namespace Gnb.Clocking.Application.Clocking;
 public interface IClockPhotoStore
 {
     Task<ClockPhoto> SaveJpegAsync(
-        CandidateBadge candidate,
+        StaffBadge staff,
         bool isClockOut,
         DateTime referenceDate,
         ReadOnlyMemory<byte> jpeg,

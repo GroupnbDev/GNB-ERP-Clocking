@@ -6,8 +6,8 @@ namespace Gnb.Clocking.Infrastructure.ClockKiosk;
 
 /// <summary>
 /// Writes the JPEG locally (<see cref="FileClockPhotoStore"/>), then <c>POST api/clock-kiosk/photos</c>.
-/// The server picks the schedule day (clock-out follows the open shift), so the local copy is moved
-/// to the returned <c>Records/{day}/ClockIN|ClockOut.jpeg</c> when the days differ.
+/// The server picks the schedule day and file name (clock-out follows the open shift), so the local copy is moved
+/// to the server's returned path (user clock-photo path) when it differs.
 /// </summary>
 public sealed class HttpClockPhotoStore : IClockPhotoStore
 {
@@ -23,20 +23,20 @@ public sealed class HttpClockPhotoStore : IClockPhotoStore
     }
 
     public async Task<ClockPhoto> SaveJpegAsync(
-        CandidateBadge candidate,
+        StaffBadge staff,
         bool isClockOut,
         DateTime referenceDate,
         ReadOnlyMemory<byte> jpeg,
         CancellationToken cancellationToken = default)
     {
-        var local = await _local.SaveJpegAsync(candidate, isClockOut, referenceDate, jpeg, cancellationToken)
+        var local = await _local.SaveJpegAsync(staff, isClockOut, referenceDate, jpeg, cancellationToken)
             .ConfigureAwait(false);
 
         PhotoUploadResponse uploaded;
         try
         {
             uploaded = await _api
-                .UploadPhotoAsync(candidate.Rfid, isClockOut, local.AbsolutePath, DateTimeOffset.Now, cancellationToken)
+                .UploadPhotoAsync(staff.Rfid, isClockOut, local.AbsolutePath, DateTimeOffset.Now, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (ClockOfflineException)
@@ -45,21 +45,21 @@ public sealed class HttpClockPhotoStore : IClockPhotoStore
             return local;
         }
 
+        // The server names the file; the kiosk only mirrors that path locally and never builds one for the server.
         var serverPath = uploaded.RelativePath?.Replace('\\', '/').TrimStart('/');
-        if (string.IsNullOrWhiteSpace(serverPath)
-            || !serverPath.EndsWith(ClockPhotoPaths.FileName(isClockOut), StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(serverPath) || serverPath.Contains("..", StringComparison.Ordinal))
             throw new ClockingException("The clock server did not store the photo. Try again.");
 
         if (string.Equals(serverPath, local.RelativePath, StringComparison.Ordinal))
-            return local;
+            return local with { OnServer = true };
 
-        var absolute = ClockKioskPhotoPaths.LocalAbsolutePath(_root, candidate.CandidateId, serverPath);
+        var absolute = ClockKioskPhotoPaths.LocalAbsolutePath(_root, staff.UserId, serverPath);
         var folder = Path.GetDirectoryName(absolute);
         if (!string.IsNullOrEmpty(folder))
             Directory.CreateDirectory(folder);
         File.Move(local.AbsolutePath, absolute, overwrite: true);
         MoveThumbnail(local.AbsolutePath, absolute);
-        return new ClockPhoto(serverPath, absolute);
+        return new ClockPhoto(serverPath, absolute, OnServer: true);
     }
 
     /// <summary>The activity list reads the thumbnail beside the photo, so it follows the photo's new folder.</summary>

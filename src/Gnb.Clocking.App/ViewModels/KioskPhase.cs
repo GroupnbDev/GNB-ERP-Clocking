@@ -9,6 +9,6 @@ public enum KioskPhase
     Hold,
     Success,
     Unknown,
-    /// <summary>The card is not linked to a Working candidate. The RFID dialog shows its number.</summary>
+    /// <summary>The badge is unknown or its user cannot clock yet. The RFID dialog shows its number.</summary>
     Unassigned
 }

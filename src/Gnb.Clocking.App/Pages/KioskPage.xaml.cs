@@ -354,13 +354,13 @@ public partial class KioskPage : ContentPage
     }
 
     /// <summary>
-    /// RFID dialog: the card is not linked to a Working candidate. Warning for both variants (staff must act);
+    /// RFID dialog: the badge is unknown or its user is not ready to clock. Warning for both variants (staff must act);
     /// the colours live in XAML tokens and only the glyph differs. Same entrance as the cooldown card with a
     /// 10 s bar; a new tap moves the phase on and closes it.
     /// </summary>
     private async Task ShowRfidAsync(int motion)
     {
-        RfidIconLabel.Text = _viewModel.IsReassign ? "!" : "+";
+        RfidIconLabel.Text = _viewModel.IsNotReady ? "!" : "+";
 
         RfidOverlay.CancelAnimations();
         RfidCard.CancelAnimations();
@@ -388,7 +388,7 @@ public partial class KioskPage : ContentPage
             RfidCard.TranslateTo(0, 0, 420, Easing.CubicOut),
             RfidNumberChip.ScaleTo(1, 520, Easing.SpringOut));
         FocusBadge();
-        if (motion == _motion && _viewModel.IsReassign)
+        if (motion == _motion && _viewModel.IsNotReady)
             await ShakeAsync(RfidNumberChip);
     }
 
@@ -957,7 +957,7 @@ public partial class KioskPage : ContentPage
             KioskPhase.Hold => ("Please wait", StatusColors.NeutralSolid, StatusColors.NeutralSolid, StatusColors.NeutralOnSolid),
             KioskPhase.Success => ("Punch saved", StatusColors.SuccessSolid, StatusColors.SuccessSolid, StatusColors.SuccessOnSolid),
             KioskPhase.Unknown => ("Needs attention", StatusColors.ErrorSolid, StatusColors.ErrorSolid, StatusColors.ErrorOnSolid),
-            KioskPhase.Unassigned => (_viewModel.IsReassign ? "Reassign card" : "Card not assigned",
+            KioskPhase.Unassigned => (_viewModel.IsNotReady ? "Badge not ready" : "Badge not registered",
                 StatusColors.WarningSoft, StatusColors.WarningBorder, StatusColors.WarningText),
             _ => ("Ready", Crimson, Crimson, Colors.White),
         };

@@ -45,11 +45,11 @@ public sealed class PunchRow
             // Minute, not ticks: a queued punch and the server's copy of it after sync land on the same
             // key, so the list keeps the row instead of rebuilding. The cooldown rules out two same-action
             // punches for one person inside a minute.
-            Key = $"{clockEvent.CandidateId}|{clockEvent.Action}|{clockEvent.At.UtcDateTime:yyyyMMddHHmm}",
+            Key = $"{clockEvent.UserId}|{clockEvent.Action}|{clockEvent.At.UtcDateTime:yyyyMMddHHmm}",
             ShowPendingNote = clockEvent.PendingSync && !clockEvent.NeedsAttention,
             ShowAttentionNote = clockEvent.NeedsAttention,
             Initials = clockEvent.Initials,
-            Name = clockEvent.CandidateName,
+            Name = clockEvent.UserName,
             Action = clockEvent.IsExtra
                 ? arrived ? "Extra in" : "Extra out"
                 : arrived ? "Clock in" : "Clock out",

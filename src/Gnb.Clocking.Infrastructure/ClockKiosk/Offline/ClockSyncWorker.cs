@@ -42,7 +42,7 @@ public sealed class ClockSyncWorker
         try
         {
             List<QueuedPunch> pending = await _store.ListPendingAsync().ConfigureAwait(false);
-            // Tracks what this device last got accepted per candidate, to tell a double tap from a real gap.
+            // Tracks what this device last got accepted per user, to tell a double tap from a real gap.
             var lastWasClockOut = new Dictionary<int, bool>();
             foreach (QueuedPunch punch in pending)
             {
@@ -51,7 +51,7 @@ public sealed class ClockSyncWorker
                 {
                     await SendAsync(punch, cancellationToken).ConfigureAwait(false);
                     await _store.MarkSyncedAsync(punch, DateTimeOffset.Now).ConfigureAwait(false);
-                    lastWasClockOut[punch.CandidateId] = punch.IsClockOut;
+                    lastWasClockOut[punch.UserId] = punch.IsClockOut;
                     synced++;
                 }
                 catch (ClockOfflineException)
@@ -67,7 +67,7 @@ public sealed class ClockSyncWorker
                     // A second clock-out for a shift this device already closed is a double tap, not a
                     // lost punch: still recorded on both sides, but it is not staff's problem.
                     bool duplicateClockOut = punch.IsClockOut
-                        && lastWasClockOut.TryGetValue(punch.CandidateId, out bool alreadyOut)
+                        && lastWasClockOut.TryGetValue(punch.UserId, out bool alreadyOut)
                         && alreadyOut
                         && ex.Message.Contains("not clocked in", StringComparison.OrdinalIgnoreCase);
                     if (duplicateClockOut)
@@ -104,12 +104,12 @@ public sealed class ClockSyncWorker
     {
         RosterResponse roster = await _api.GetRosterAsync(cancellationToken).ConfigureAwait(false);
         var before = DateTimeOffset.UtcNow;
-        List<RosterEntry> entries = (roster.Candidates ?? new List<RosterCandidate>())
+        List<RosterEntry> entries = (roster.Users ?? new List<RosterUser>())
             .Select(c => new RosterEntry
             {
-                CardNumber = Gnb.Clocking.Domain.Clocking.RfidNormalizer.Normalize(c.CardNumber),
-                CandidateId = c.CandidateId,
-                CandidateNumber = c.CandidateNumber,
+                RfidNumber = Gnb.Clocking.Domain.Clocking.RfidNormalizer.Normalize(c.RfidNumber),
+                UserId = c.UserId,
+                EmployeeNumber = c.EmployeeNumber ?? string.Empty,
                 FirstName = c.FirstName ?? string.Empty,
                 LastName = c.LastName ?? string.Empty,
                 TenantId = c.TenantId,
@@ -117,7 +117,7 @@ public sealed class ClockSyncWorker
                 Assignment = c.Assignment ?? string.Empty,
                 ClientName = c.ClientName ?? string.Empty,
             })
-            .Where(e => e.CardNumber.Length > 0)
+            .Where(e => e.RfidNumber.Length > 0)
             .ToList();
 
         await _store.ReplaceRosterAsync(entries, DateTimeOffset.Now).ConfigureAwait(false);
@@ -132,7 +132,7 @@ public sealed class ClockSyncWorker
         if (File.Exists(punch.PhotoPath))
         {
             PhotoUploadResponse uploaded = await _api
-                .UploadPhotoAsync(punch.CardNumber, punch.IsClockOut, punch.PhotoPath, punch.LocalTime, cancellationToken)
+                .UploadPhotoAsync(punch.RfidNumber, punch.IsClockOut, punch.PhotoPath, punch.LocalTime, cancellationToken)
                 .ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(uploaded.RelativePath))
                 imagePath = uploaded.RelativePath!.Replace('\\', '/').TrimStart('/');
@@ -143,7 +143,7 @@ public sealed class ClockSyncWorker
 
         await _api.ClockAsync(
                 punch.IsClockOut,
-                punch.CardNumber,
+                punch.RfidNumber,
                 imagePath,
                 resetCompletedDay: false,
                 punch.ClientPunchId,

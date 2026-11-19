@@ -49,6 +49,14 @@ ClockKiosk__CameraStallSeconds=15
 
 Every 5 minutes the log writes a `Health` line (memory, handles, threads, camera restarts). If the kiosk keeps closing, send the last `kiosk-*.log` and `%LOCALAPPDATA%\GroupNB Clock\supervisor.log`.
 
+## Badges
+
+The kiosk clocks staff users. A badge is a user's RFID number, set in the ERP under User Management (the field shows only when the kiosk is enabled for that tenant and organization). The user must be active and have a work schedule; otherwise the kiosk says "This badge isn't ready to clock — ask HR." An unregistered badge shows its number so HR can look it up. Recruitment candidates can no longer clock here.
+
+### Upgrading from the candidate build
+
+Drain the offline queue first: leave the old kiosk online until the activity list shows nothing waiting to sync, then close it (Ctrl+Shift+Q). The first launch of this build recreates the local database (`clock-queue.db3`): the cached roster is dropped and reloaded from the server, and any punch still queued or parked from the old build is discarded with a warning in `kiosk-*.log`. The old `Candidates` photo folder is deleted; new photos go under `Users/{id}`. Deploy the API first, because this build only understands the staff-user API.
+
 ## Run from source
 
 ```powershell

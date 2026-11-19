@@ -48,7 +48,7 @@ public sealed class ClockKioskApiOptions
         (value ?? string.Empty)
             .Split(new[] { ',', '[', ']', ' ' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-    /// <summary>Folder that holds the local copy of clock photos (<c>Candidates/{id}/Records/...</c>).</summary>
+    /// <summary>Folder that holds the local copy of clock photos (<c>Users/{id}/Records/...</c>).</summary>
     public required string PhotoRoot { get; init; }
 
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(20);

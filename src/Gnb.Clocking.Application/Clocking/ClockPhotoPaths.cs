@@ -4,7 +4,8 @@ namespace Gnb.Clocking.Application.Clocking;
 
 /// <summary>
 /// Same disk convention as gnbSaasApi <c>PortalTimesheetDocumentHelper</c>:
-/// <c>Candidates/{candidateId}/Records/{yyyy-MM-dd}/ClockIN.jpeg</c> or <c>ClockOut.jpeg</c>.
+/// the kiosk's local copy is <c>Users/{userId}/Records/{yyyy-MM-dd}/ClockIN.jpeg</c> or <c>ClockOut.jpeg</c>
+/// until the upload response names the server path.
 /// </summary>
 public static class ClockPhotoPaths
 {
@@ -22,4 +23,8 @@ public static class ClockPhotoPaths
     }
 }
 
-public sealed record ClockPhoto(string RelativePath, string AbsolutePath);
+/// <param name="RelativePath">
+/// The server's clock-photo path when <paramref name="OnServer"/> is true (sent back as <c>image_path</c>);
+/// otherwise a local placeholder that is replaced by the upload response when the queued punch syncs.
+/// </param>
+public sealed record ClockPhoto(string RelativePath, string AbsolutePath, bool OnServer = false);

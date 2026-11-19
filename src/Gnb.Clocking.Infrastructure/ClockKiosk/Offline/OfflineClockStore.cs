@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using SQLite;
 
 namespace Gnb.Clocking.Infrastructure.ClockKiosk.Offline;
@@ -11,12 +13,22 @@ public sealed class OfflineClockStore : IAsyncDisposable
     public const string RosterSyncedAtKey = "roster_synced_at";
     public const string ClockSkewKey = "clock_skew_seconds";
 
+    /// <summary>
+    /// Stored in SQLite <c>PRAGMA user_version</c>. 0 (never written) was the candidate-era
+    /// layout; 2 keys everything by staff user id and employee number.
+    /// </summary>
+    public const int SchemaVersion = 2;
+
     private readonly SQLiteAsyncConnection _db;
+    private readonly string _databasePath;
+    private readonly ILogger _logger;
     private readonly SemaphoreSlim _ready = new(1, 1);
     private bool _initialized;
 
-    public OfflineClockStore(string databasePath)
+    public OfflineClockStore(string databasePath, ILogger<OfflineClockStore>? logger = null)
     {
+        _databasePath = databasePath;
+        _logger = logger ?? NullLogger<OfflineClockStore>.Instance;
         _db = new SQLiteAsyncConnection(
             databasePath,
             SQLiteOpenFlags.ReadWrite | SQLiteOpenFlags.Create | SQLiteOpenFlags.FullMutex | SQLiteOpenFlags.SharedCache);
@@ -32,6 +44,7 @@ public sealed class OfflineClockStore : IAsyncDisposable
         {
             if (!_initialized)
             {
+                await UpgradeSchemaAsync().ConfigureAwait(false);
                 await _db.CreateTableAsync<QueuedPunch>().ConfigureAwait(false);
                 await _db.CreateTableAsync<RosterEntry>().ConfigureAwait(false);
                 await _db.CreateTableAsync<OpenShiftRecord>().ConfigureAwait(false);
@@ -45,6 +58,60 @@ public sealed class OfflineClockStore : IAsyncDisposable
         }
 
         return _db;
+    }
+
+    /// <summary>
+    /// A database written by the candidate-era kiosk (no schema version) is not migrated: its roster cache
+    /// is rebuilt from the server, and any punch still queued or parked in it is discarded, because those
+    /// rows name candidates the server no longer accepts. Drain the queue before installing this build.
+    /// </summary>
+    private async Task UpgradeSchemaAsync()
+    {
+        int version = await _db.ExecuteScalarAsync<int>("PRAGMA user_version").ConfigureAwait(false);
+        if (version >= SchemaVersion)
+            return;
+
+        int hasQueue = await _db.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'queued_punch'").ConfigureAwait(false);
+        if (hasQueue > 0)
+        {
+            int discarded = await _db.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM queued_punch WHERE state IN (?, ?)",
+                QueuedPunchStates.Pending,
+                QueuedPunchStates.Parked).ConfigureAwait(false);
+            _logger.LogWarning(
+                "Upgrading the local clock database to schema {Version}: discarding {Discarded} unsynced candidate punch(es) and the old roster cache",
+                SchemaVersion,
+                discarded);
+
+            await _db.ExecuteAsync("DROP TABLE IF EXISTS queued_punch").ConfigureAwait(false);
+            await _db.ExecuteAsync("DROP TABLE IF EXISTS roster_entry").ConfigureAwait(false);
+            await _db.ExecuteAsync("DROP TABLE IF EXISTS open_shift").ConfigureAwait(false);
+            // Forces a roster refresh on the first online pass.
+            await _db.ExecuteAsync("DELETE FROM kiosk_setting WHERE key = ?", RosterSyncedAtKey).ConfigureAwait(false);
+            DeleteLegacyPhotoFolder();
+        }
+
+        await _db.ExecuteAsync($"PRAGMA user_version = {SchemaVersion}").ConfigureAwait(false);
+    }
+
+    /// <summary>The candidate photo copies belong to punches that were just discarded.</summary>
+    private void DeleteLegacyPhotoFolder()
+    {
+        string? root = Path.GetDirectoryName(_databasePath);
+        if (string.IsNullOrEmpty(root))
+            return;
+
+        try
+        {
+            string legacy = Path.Combine(root, "Candidates");
+            if (Directory.Exists(legacy))
+                Directory.Delete(legacy, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Could not remove the legacy candidate photo folder");
+        }
     }
 
     // ---------------------------------------------------------------- queue
@@ -137,12 +204,12 @@ public sealed class OfflineClockStore : IAsyncDisposable
         await db.UpdateAsync(punch).ConfigureAwait(false);
     }
 
-    /// <summary>Most recent pending punch for a candidate — the device's own view of their shift state.</summary>
-    public async Task<QueuedPunch?> LatestPendingForCandidateAsync(int candidateId)
+    /// <summary>Most recent pending punch for a user — the device's own view of their shift state.</summary>
+    public async Task<QueuedPunch?> LatestPendingForUserAsync(int userId)
     {
         var db = await ConnectionAsync().ConfigureAwait(false);
         List<QueuedPunch> rows = await db.Table<QueuedPunch>()
-            .Where(p => p.CandidateId == candidateId && p.State == QueuedPunchStates.Pending)
+            .Where(p => p.UserId == userId && p.State == QueuedPunchStates.Pending)
             .OrderByDescending(p => p.CapturedAt)
             .ToListAsync()
             .ConfigureAwait(false);
@@ -182,7 +249,7 @@ public sealed class OfflineClockStore : IAsyncDisposable
         var rows = openShifts
             .Select(pair => new OpenShiftRecord
             {
-                CandidateId = pair.Key,
+                UserId = pair.Key,
                 OpenClockInIso = pair.Value.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
             })
             .ToList();
@@ -196,11 +263,11 @@ public sealed class OfflineClockStore : IAsyncDisposable
         }).ConfigureAwait(false);
     }
 
-    public async Task<OpenShiftRecord?> FindOpenShiftAsync(int candidateId)
+    public async Task<OpenShiftRecord?> FindOpenShiftAsync(int userId)
     {
         var db = await ConnectionAsync().ConfigureAwait(false);
         return await db.Table<OpenShiftRecord>()
-            .Where(r => r.CandidateId == candidateId)
+            .Where(r => r.UserId == userId)
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
     }
@@ -225,11 +292,11 @@ public sealed class OfflineClockStore : IAsyncDisposable
         await SetSettingAsync(RosterSyncedAtKey, syncedAt.ToString("o")).ConfigureAwait(false);
     }
 
-    public async Task<RosterEntry?> FindRosterByCardAsync(string normalizedCardNumber)
+    public async Task<RosterEntry?> FindRosterByRfidAsync(string normalizedRfidNumber)
     {
         var db = await ConnectionAsync().ConfigureAwait(false);
         return await db.Table<RosterEntry>()
-            .Where(r => r.CardNumber == normalizedCardNumber)
+            .Where(r => r.RfidNumber == normalizedRfidNumber)
             .FirstOrDefaultAsync()
             .ConfigureAwait(false);
     }

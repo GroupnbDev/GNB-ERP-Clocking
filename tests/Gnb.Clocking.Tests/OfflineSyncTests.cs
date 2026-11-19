@@ -53,9 +53,9 @@ public sealed class OfflineSyncTests : IAsyncDisposable
         return new QueuedPunch
         {
             ClientPunchId = id,
-            CandidateId = 1042,
-            CardNumber = "04A1C8E291",
-            CandidateName = "Maya Chen",
+            UserId = 1042,
+            RfidNumber = "04A1C8E291",
+            UserName = "Maya Chen",
             IsClockOut = isClockOut,
             LocalTime = when,
             CapturedAt = when,
@@ -82,6 +82,37 @@ public sealed class OfflineSyncTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_candidate_era_database_is_discarded_and_recreated_on_upgrade()
+    {
+        Directory.CreateDirectory(_root);
+        var legacyPhotos = Path.Combine(_root, "Candidates", "9", "Records", "2026-09-01");
+        Directory.CreateDirectory(legacyPhotos);
+        var legacy = new SQLite.SQLiteAsyncConnection(DbPath);
+        await legacy.ExecuteAsync(
+            "CREATE TABLE queued_punch (client_punch_id TEXT PRIMARY KEY, candidate_id INTEGER, state TEXT)");
+        await legacy.ExecuteAsync("INSERT INTO queued_punch VALUES ('old-1', 9, 'pending'), ('old-2', 9, 'synced')");
+        await legacy.ExecuteAsync("CREATE TABLE roster_entry (card_number TEXT PRIMARY KEY, candidate_id INTEGER)");
+        await legacy.ExecuteAsync("CREATE TABLE kiosk_setting (key TEXT PRIMARY KEY, value TEXT)");
+        await legacy.ExecuteAsync("INSERT INTO kiosk_setting VALUES ('roster_synced_at', '2026-09-01'), ('clock_skew_seconds', '12')");
+        await legacy.CloseAsync();
+
+        var store = Store();
+
+        Assert.Equal(0, await store.CountPendingAsync());
+        Assert.Empty(await store.ListUnsyncedAsync(10));
+        Assert.Null(await store.GetRosterSyncedAtAsync());
+        Assert.Equal(12, await store.GetClockSkewSecondsAsync());
+        Assert.False(Directory.Exists(Path.Combine(_root, "Candidates")));
+
+        // The new layout is usable straight away and the upgrade does not run a second time.
+        await store.EnqueueAsync(Punch("new-1"));
+        await store.DisposeAsync();
+        _store = null;
+        var reopened = Store();
+        Assert.Equal(1, await reopened.CountPendingAsync());
+    }
+
+    [Fact]
     public async Task Sync_sends_the_original_tap_time_and_the_punch_id()
     {
         var store = Store();
@@ -90,7 +121,7 @@ public sealed class OfflineSyncTests : IAsyncDisposable
         _handler.On("POST", "/api/clock-kiosk/photos", HttpStatusCode.OK,
             """{"relative_path":"Records/2026-09-25/ClockIN.jpeg","file_name":"ClockIN.jpeg"}""");
         _handler.On("POST", "/api/clock-kiosk/clock-in", HttpStatusCode.OK,
-            """{"action":"clock_in","candidate_id":1042,"record_id":77,"utc_time":"2026-09-25T12:25:00Z"}""");
+            """{"action":"clock_in","user_id":1042,"record_id":77,"utc_time":"2026-09-25T12:25:00Z"}""");
 
         SyncOutcome outcome = await new ClockSyncWorker(Api(), store).DrainAsync();
 
@@ -142,15 +173,15 @@ public sealed class OfflineSyncTests : IAsyncDisposable
         _handler.On("POST", "/api/clock-kiosk/photos", HttpStatusCode.OK,
             "{\"relative_path\":\"Records/2026-09-25/ClockOut.jpeg\",\"file_name\":\"ClockOut.jpeg\"}");
         _handler.On("POST", "/api/clock-kiosk/clock-in", HttpStatusCode.OK,
-            "{\"action\":\"clock_in\",\"candidate_id\":1042,\"record_id\":78,\"utc_time\":\"2026-09-25T08:30:00Z\"}");
+            "{\"action\":\"clock_in\",\"user_id\":1042,\"record_id\":78,\"utc_time\":\"2026-09-25T08:30:00Z\"}");
         // The shift is open, closed, then reopened, so the server accepts the first and third clock-outs
         // and refuses the second. The device never decides this on its own: only the server knows.
         _handler.OnSequence(
             "POST",
             "/api/clock-kiosk/clock-out",
-            (HttpStatusCode.OK, "{\"action\":\"clock_out\",\"candidate_id\":1042,\"record_id\":77,\"utc_time\":\"2026-09-25T06:30:00Z\"}"),
+            (HttpStatusCode.OK, "{\"action\":\"clock_out\",\"user_id\":1042,\"record_id\":77,\"utc_time\":\"2026-09-25T06:30:00Z\"}"),
             (HttpStatusCode.BadRequest, "{\"error\":\"You are not clocked in on any shift.\"}"),
-            (HttpStatusCode.OK, "{\"action\":\"clock_out\",\"candidate_id\":1042,\"record_id\":78,\"utc_time\":\"2026-09-25T12:30:00Z\"}"));
+            (HttpStatusCode.OK, "{\"action\":\"clock_out\",\"user_id\":1042,\"record_id\":78,\"utc_time\":\"2026-09-25T12:30:00Z\"}"));
 
         SyncOutcome outcome = await new ClockSyncWorker(Api(), store).DrainAsync();
 
@@ -206,11 +237,11 @@ public sealed class OfflineSyncTests : IAsyncDisposable
         _handler.On("POST", "/api/clock-kiosk/photos", HttpStatusCode.OK,
             "{\"relative_path\":\"Records/2026-09-25/ClockIN.jpeg\",\"file_name\":\"ClockIN.jpeg\"}");
         _handler.On("POST", "/api/clock-kiosk/clock-in", HttpStatusCode.OK,
-            "{\"action\":\"clock_in\",\"candidate_id\":1042,\"record_id\":77,\"utc_time\":\"2026-09-25T12:00:00Z\"}");
+            "{\"action\":\"clock_in\",\"user_id\":1042,\"record_id\":77,\"utc_time\":\"2026-09-25T12:00:00Z\"}");
         _handler.OnSequence(
             "POST",
             "/api/clock-kiosk/clock-out",
-            (HttpStatusCode.OK, "{\"action\":\"clock_out\",\"candidate_id\":1042,\"record_id\":77,\"hours_worked\":1.5,\"utc_time\":\"2026-09-25T13:30:00Z\"}"),
+            (HttpStatusCode.OK, "{\"action\":\"clock_out\",\"user_id\":1042,\"record_id\":77,\"hours_worked\":1.5,\"utc_time\":\"2026-09-25T13:30:00Z\"}"),
             (HttpStatusCode.BadRequest, "{\"error\":\"You are not clocked in on any shift.\"}"));
 
 
@@ -245,8 +276,8 @@ public sealed class OfflineSyncTests : IAsyncDisposable
             {
                 new RosterEntry
                 {
-                    CardNumber = "04A1C8E291",
-                    CandidateId = 1042,
+                    RfidNumber = "04A1C8E291",
+                    UserId = 1042,
                     FirstName = "Maya",
                     LastName = "Chen",
                     TenantId = 6,
@@ -265,7 +296,7 @@ public sealed class OfflineSyncTests : IAsyncDisposable
         await service.PrimeFromCacheAsync();
 
         _handler.FailWithNetworkError = true;
-        var directory = new HttpCandidateBadgeDirectory(Api(), shifts, reopened);
+        var directory = new HttpStaffBadgeDirectory(Api(), shifts, reopened);
         var badge = await directory.FindByRfidAsync("04A1C8E291");
 
         Assert.NotNull(badge);
@@ -320,14 +351,14 @@ public sealed class OfflineSyncTests : IAsyncDisposable
         _handler.On("POST", "/api/clock-kiosk/photos", HttpStatusCode.OK,
             "{\"relative_path\":\"Records/2026-09-25/ClockIN.jpeg\",\"file_name\":\"ClockIN.jpeg\"}");
         _handler.On("POST", "/api/clock-kiosk/clock-in", HttpStatusCode.OK,
-            "{\"action\":\"clock_in\",\"candidate_id\":1042,\"record_id\":77,\"utc_time\":\"2026-09-25T00:25:00Z\"}");
+            "{\"action\":\"clock_in\",\"user_id\":1042,\"record_id\":77,\"utc_time\":\"2026-09-25T00:25:00Z\"}");
         _handler.On("GET", "/api/clock-kiosk/roster", HttpStatusCode.OK,
-            "{\"candidates\":[],\"server_time\":\"2026-09-25T00:30:00Z\",\"count\":0}");
+            "{\"users\":[],\"server_time\":\"2026-09-25T00:30:00Z\",\"count\":0}");
         _handler.On("GET", "/api/clock-kiosk/sessions", HttpStatusCode.OK,
-            "{\"events\":[{\"record_id\":77,\"candidate_id\":1042,\"first_name\":\"Maya\",\"last_name\":\"Chen\"," +
-            "\"candidate_name\":\"Maya Chen\",\"action\":\"clock_in\",\"local_time\":\"2026-09-25T08:25:00+08:00\"," +
+            "{\"events\":[{\"record_id\":77,\"user_id\":1042,\"first_name\":\"Maya\",\"last_name\":\"Chen\"," +
+            "\"user_name\":\"Maya Chen\",\"action\":\"clock_in\",\"local_time\":\"2026-09-25T08:25:00+08:00\"," +
             "\"assignment\":\"Inbound sort\",\"hours_worked\":null,\"photo_relative_path\":null}]," +
-            "\"open_shifts\":[{\"candidate_id\":1042,\"open_clock_in\":\"2026-09-25T08:25:00+08:00\"}],\"open_count\":1}");
+            "\"open_shifts\":[{\"user_id\":1042,\"open_clock_in\":\"2026-09-25T08:25:00+08:00\"}],\"open_count\":1}");
 
         var service = new HttpClockingService(Api(), new KioskShiftCache(), Options(), store, new ClockSyncWorker(Api(), store));
         await service.RefreshAsync();
@@ -338,21 +369,21 @@ public sealed class OfflineSyncTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Roster_refresh_caches_candidates_and_measures_clock_skew()
+    public async Task Roster_refresh_caches_users_and_measures_clock_skew()
     {
         var store = Store();
         var serverNow = DateTimeOffset.UtcNow.AddSeconds(-30);
         _handler.On("GET", "/api/clock-kiosk/roster", HttpStatusCode.OK, $$"""
-            {"candidates":[{"candidate_id":1042,"candidate_number":42,"card_number":"04a1-c8e291","first_name":"Maya",
+            {"users":[{"user_id":1042,"employee_number":"E-042","rfid_number":"04a1-c8e291","first_name":"Maya",
              "last_name":"Chen","tenant_id":6,"organization_id":16,"assignment":"Inbound sort","client_name":"Sysco"}],
              "server_time":"{{serverNow:o}}","count":1}
             """);
 
         await new ClockSyncWorker(Api(), store).RefreshRosterAsync();
 
-        RosterEntry? entry = await store.FindRosterByCardAsync("04A1C8E291");
+        RosterEntry? entry = await store.FindRosterByRfidAsync("04A1C8E291");
         Assert.NotNull(entry);
-        Assert.Equal(1042, entry.CandidateId);
+        Assert.Equal(1042, entry.UserId);
         Assert.Equal("Inbound sort", entry.Assignment);
         Assert.NotNull(await store.GetRosterSyncedAtAsync());
         // Device clock reads ahead of the server by roughly the 30s offset above.

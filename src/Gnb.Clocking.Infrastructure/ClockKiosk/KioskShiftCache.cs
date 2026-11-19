@@ -22,10 +22,10 @@ public sealed class KioskShiftCache
         }
     }
 
-    public DateTimeOffset? GetOpenClockIn(int candidateId)
+    public DateTimeOffset? GetOpenClockIn(int userId)
     {
         lock (_gate)
-            return _open.TryGetValue(candidateId, out var at) ? at : null;
+            return _open.TryGetValue(userId, out var at) ? at : null;
     }
 
     public IReadOnlyList<ClockEvent> GetEvents()
@@ -34,14 +34,14 @@ public sealed class KioskShiftCache
             return _events;
     }
 
-    public void SetShift(int candidateId, DateTimeOffset? openClockIn)
+    public void SetShift(int userId, DateTimeOffset? openClockIn)
     {
         lock (_gate)
         {
             if (openClockIn is DateTimeOffset at)
-                _open[candidateId] = at;
+                _open[userId] = at;
             else
-                _open.Remove(candidateId);
+                _open.Remove(userId);
         }
     }
 
@@ -50,8 +50,8 @@ public sealed class KioskShiftCache
         lock (_gate)
         {
             _open.Clear();
-            foreach (var (candidateId, at) in openShifts)
-                _open[candidateId] = at;
+            foreach (var (userId, at) in openShifts)
+                _open[userId] = at;
             _events = events;
         }
     }

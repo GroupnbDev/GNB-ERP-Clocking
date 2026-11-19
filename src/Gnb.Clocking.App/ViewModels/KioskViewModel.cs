@@ -21,12 +21,12 @@ public enum ServerLink
 
 public sealed class KioskViewModel : INotifyPropertyChanged
 {
-    private readonly ICandidateBadgeDirectory _directory;
+    private readonly IStaffBadgeDirectory _directory;
     private readonly IClockingService _clocking;
     private readonly IClock _clock;
     private readonly IClockCamera _camera;
     private readonly IClockPhotoStore _photos;
-    private CandidateBadge? _badge;
+    private StaffBadge? _badge;
     private readonly Dictionary<int, DateTimeOffset> _lastClockOut = new();
 
     /// <summary>Seconds the cooldown card stays up. Long enough to read the time it names.</summary>
@@ -46,7 +46,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     private string _rfidHolderStatus = string.Empty;
     private bool _hasRfidHolder;
     private bool _hasRfidHolderStatus;
-    private bool _isReassign;
+    private bool _isNotReady;
     private int _returnTicket;
     private readonly ILogger<KioskViewModel> _logger;
     private readonly CameraSettings _cameraSettings;
@@ -69,7 +69,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     private string _clockMeridiem = string.Empty;
     private string _dateLine = string.Empty;
     private bool _colonOn = true;
-    private string _candidateName = string.Empty;
+    private string _userName = string.Empty;
     private string _initials = string.Empty;
     private string _assignmentLine = string.Empty;
     private string _statusDetail = string.Empty;
@@ -98,7 +98,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     private bool _successSavedHere;
 
     public KioskViewModel(
-        ICandidateBadgeDirectory directory,
+        IStaffBadgeDirectory directory,
         IClockingService clocking,
         IClock clock,
         IClockCamera camera,
@@ -145,7 +145,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             };
             PromptDetail = value switch
             {
-                KioskPhase.Reading => "Matching it to a GroupNB candidate",
+                KioskPhase.Reading => "Matching it to a GroupNB staff member",
                 KioskPhase.Capturing => "Hold still. This frame is saved with the punch.",
                 KioskPhase.Hold => _holdDetail,
                 KioskPhase.Unassigned => $"RFID {_rfidNumber}",
@@ -159,16 +159,16 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     public string HoldSince { get => _holdSince; private set => SetProperty(ref _holdSince, value); }
     public string HoldReady { get => _holdReady; private set => SetProperty(ref _holdReady, value); }
 
-    /// <summary>RFID dialog: the card number staff assign (unknown card) or reassign (candidate not Working).</summary>
+    /// <summary>RFID dialog: the badge's RFID number: unknown badge, or a user who is not ready to clock.</summary>
     public string RfidNumber { get => _rfidNumber; private set => SetProperty(ref _rfidNumber, value); }
     public string RfidTitle { get => _rfidTitle; private set => SetProperty(ref _rfidTitle, value); }
     public string RfidDetail { get => _rfidDetail; private set => SetProperty(ref _rfidDetail, value); }
-    /// <summary>Who holds the card now, and the status that stops them clocking (reassign only).</summary>
+    /// <summary>Who holds the badge, and why they cannot clock yet (not-ready only).</summary>
     public string RfidHolderName { get => _rfidHolderName; private set => SetProperty(ref _rfidHolderName, value); }
     public string RfidHolderStatus { get => _rfidHolderStatus; private set => SetProperty(ref _rfidHolderStatus, value); }
     public bool HasRfidHolder { get => _hasRfidHolder; private set => SetProperty(ref _hasRfidHolder, value); }
     public bool HasRfidHolderStatus { get => _hasRfidHolderStatus; private set => SetProperty(ref _hasRfidHolderStatus, value); }
-    public bool IsReassign { get => _isReassign; private set => SetProperty(ref _isReassign, value); }
+    public bool IsNotReady { get => _isNotReady; private set => SetProperty(ref _isNotReady, value); }
 
     public string BadgeText { get => _badgeText; set => SetProperty(ref _badgeText, value); }
     public string Prompt { get => _prompt; private set => SetProperty(ref _prompt, value); }
@@ -178,7 +178,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     public string ClockMeridiem { get => _clockMeridiem; private set => SetProperty(ref _clockMeridiem, value); }
     public string DateLine { get => _dateLine; private set => SetProperty(ref _dateLine, value); }
     public bool ColonOn { get => _colonOn; private set => SetProperty(ref _colonOn, value); }
-    public string CandidateName { get => _candidateName; private set => SetProperty(ref _candidateName, value); }
+    public string UserName { get => _userName; private set => SetProperty(ref _userName, value); }
     public string Initials { get => _initials; private set => SetProperty(ref _initials, value); }
     public string AssignmentLine { get => _assignmentLine; private set => SetProperty(ref _assignmentLine, value); }
     public string StatusDetail { get => _statusDetail; private set => SetProperty(ref _statusDetail, value); }
@@ -288,12 +288,12 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             var badge = await _directory.FindByRfidAsync(rfid, lookup.Token);
             if (badge == null)
             {
-                ShowRfidDialog(rfid, reassign: false, holderName: string.Empty, holderStatus: string.Empty);
+                ShowRfidDialog(rfid, notReady: false, holderName: string.Empty, holderStatus: string.Empty);
                 return;
             }
 
             Show(badge);
-            var openAt = IsOnShift ? _clocking.GetOpenClockIn(badge.CandidateId) : null;
+            var openAt = IsOnShift ? _clocking.GetOpenClockIn(badge.UserId) : null;
             switch (ClockCooldownPolicy.Evaluate(Now(), openAt, LatestClockOut(badge)))
             {
                 case { Kind: ClockCooldownKind.AfterClockIn } holdIn:
@@ -319,14 +319,14 @@ public sealed class KioskViewModel : INotifyPropertyChanged
 
             await CaptureAndPunchAsync(badge, resetCompletedDay: false);
         }
-        catch (BadgeNotWorkingException ex)
+        catch (BadgeNotReadyException ex)
         {
             failure = ex;
             ShowRfidDialog(
                 string.IsNullOrWhiteSpace(ex.Rfid) ? rfid : ex.Rfid,
-                reassign: true,
-                ex.CandidateName.Trim(),
-                ex.Status?.Trim() ?? string.Empty);
+                notReady: true,
+                ex.UserName.Trim(),
+                NotReadyReason(ex.Detail));
         }
         catch (ClockingException ex)
         {
@@ -411,14 +411,14 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     /// server has not confirmed. A punch taken here counts even when the badge lookup says the day is not
     /// finished — offline the roster always says that, and dropping it skipped the hold entirely.
     /// </summary>
-    private DateTimeOffset? LatestClockOut(CandidateBadge badge)
+    private DateTimeOffset? LatestClockOut(StaffBadge badge)
     {
         DateTimeOffset? latest = badge.ShiftFinished ? badge.FinishedClockOut : null;
 
-        if (_lastClockOut.TryGetValue(badge.CandidateId, out DateTimeOffset local))
+        if (_lastClockOut.TryGetValue(badge.UserId, out DateTimeOffset local))
         {
             if (ClockCooldownPolicy.HasExpired(Now(), local))
-                _lastClockOut.Remove(badge.CandidateId);
+                _lastClockOut.Remove(badge.UserId);
             else if (latest is null || local > latest)
                 latest = local;
         }
@@ -438,28 +438,35 @@ public sealed class KioskViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// A card nobody Working can use. Shows its number for 10 seconds so staff can assign it in the ERP;
-    /// the reader stays live, and the next tap replaces this dialog straight away.
+    /// A badge nobody can clock with: not registered, or its user is not ready. Shows its number for 10 seconds
+    /// so HR can look it up in User Management; the reader stays live, and the next tap replaces this dialog.
     /// </summary>
-    private void ShowRfidDialog(string rfid, bool reassign, string holderName, string holderStatus)
+    private void ShowRfidDialog(string rfid, bool notReady, string holderName, string holderStatus)
     {
         _badge = null;
-        IsReassign = reassign;
+        IsNotReady = notReady;
         RfidNumber = rfid;
         RfidHolderName = holderName.Length > 0 ? $"Linked to {holderName}" : string.Empty;
         RfidHolderStatus = holderStatus;
         HasRfidHolder = holderName.Length > 0;
         HasRfidHolderStatus = holderStatus.Length > 0;
-        RfidTitle = reassign ? "Reassign this RFID number" : "Assign this RFID number";
-        RfidDetail = reassign
-            ? "This card belongs to a candidate who is not Working. Reassign it to a Working candidate in the ERP."
-            : "This card is not in the ERP yet. Assign it to a candidate in the ERP.";
+        RfidTitle = notReady ? "Badge not ready" : "Badge not registered";
+        RfidDetail = notReady
+            ? "This badge isn't ready to clock — ask HR."
+            : "This badge isn't registered. Ask HR to add its RFID number to your profile.";
         Phase = KioskPhase.Unassigned;
         var ticket = ++_returnTicket;
         _ = ReturnToIdleAsync(ticket, TimeSpan.FromSeconds(RfidDialogSeconds), KioskPhase.Unassigned);
     }
 
-    private async Task CaptureAndPunchAsync(CandidateBadge badge, bool resetCompletedDay)
+    private static string NotReadyReason(string? detail) => detail?.Trim().ToLowerInvariant() switch
+    {
+        "inactive" => "Inactive",
+        "no_schedule" => "No work schedule",
+        _ => string.Empty,
+    };
+
+    private async Task CaptureAndPunchAsync(StaffBadge badge, bool resetCompletedDay)
     {
         Phase = KioskPhase.Capturing;
         await Task.Delay(700);
@@ -509,7 +516,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             return;
         }
 
-        var openAt = _clocking.GetOpenClockIn(badge.CandidateId);
+        var openAt = _clocking.GetOpenClockIn(badge.UserId);
         var referenceDate = IsOnShift && openAt is DateTimeOffset started
             ? started.LocalDateTime.Date
             : Now().DateTime.Date;
@@ -525,16 +532,16 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         // time, so the screen follows its answer rather than the action this kiosk asked for.
         var savedIn = clockEvent.Action == ClockAction.In;
         if (!savedIn)
-            _lastClockOut[badge.CandidateId] = clockEvent.At;
+            _lastClockOut[badge.UserId] = clockEvent.At;
         SuccessTitle = clockEvent.IsExtra || resetCompletedDay
             ? savedIn ? "Extra time started" : "Extra time ended"
             : savedIn ? "Clocked in" : "Clocked out";
         SuccessTime = clockEvent.At.ToLocalTime().ToString("h:mm tt");
         SuccessDetail = clockEvent.IsExtra || resetCompletedDay
-            ? $"{clockEvent.CandidateName} · today's saved times stay. This is not added to hours."
+            ? $"{clockEvent.UserName} · today's saved times stay. This is not added to hours."
             : !savedIn && clockEvent.HoursWorked is double hours
-                ? $"{clockEvent.CandidateName} · {hours:0.##}h on shift"
-                : $"{clockEvent.CandidateName} · {clockEvent.Assignment}";
+                ? $"{clockEvent.UserName} · {hours:0.##}h on shift"
+                : $"{clockEvent.UserName} · {clockEvent.Assignment}";
         SuccessPhoto = photo.AbsolutePath;
         HasSuccessPhoto = true;
 
@@ -556,14 +563,17 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         FocusBadgeRequested?.Invoke();
     }
 
-    private void Show(CandidateBadge badge)
+    private void Show(StaffBadge badge)
     {
         _badge = badge;
-        var openAt = _clocking.GetOpenClockIn(badge.CandidateId);
+        var openAt = _clocking.GetOpenClockIn(badge.UserId);
         IsOnShift = openAt.HasValue;
-        CandidateName = badge.FullName;
+        UserName = badge.FullName;
         Initials = badge.Initials;
-        AssignmentLine = $"{badge.Assignment}  ·  {badge.ClientName}  ·  {badge.Site}";
+        AssignmentLine = string.Join(
+            "  ·  ",
+            new[] { badge.EmployeeNumber, badge.Assignment, badge.ClientName, badge.Site }
+                .Where(part => !string.IsNullOrWhiteSpace(part)));
         StatusDetail = openAt is DateTimeOffset start
             ? $"Since {start.ToLocalTime():h:mm tt}  ·  {Format(Now() - start)} so far"
             : badge.ShiftFinished
@@ -593,7 +603,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
         DateLine = now.ToString("dddd, MMM d");
         ColonOn = !ColonOn;
 
-        if (Phase == KioskPhase.Recognized && _badge != null && _clocking.GetOpenClockIn(_badge.CandidateId) is DateTimeOffset start)
+        if (Phase == KioskPhase.Recognized && _badge != null && _clocking.GetOpenClockIn(_badge.UserId) is DateTimeOffset start)
             StatusDetail = $"Since {start.ToLocalTime():h:mm tt}  ·  {Format(now - start)} so far";
     }
 
@@ -699,7 +709,7 @@ public sealed class KioskViewModel : INotifyPropertyChanged
             return true;
 
         return clockEvent.Action == ClockAction.In
-            && _clocking.GetOpenClockIn(clockEvent.CandidateId) is DateTimeOffset open
+            && _clocking.GetOpenClockIn(clockEvent.UserId) is DateTimeOffset open
             && open.UtcDateTime == clockEvent.At.UtcDateTime;
     }
 

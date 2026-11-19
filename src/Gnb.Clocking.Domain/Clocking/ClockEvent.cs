@@ -1,8 +1,8 @@
 namespace Gnb.Clocking.Domain.Clocking;
 
 public sealed record ClockEvent(
-    int CandidateId,
-    string CandidateName,
+    int UserId,
+    string UserName,
     string Initials,
     ClockAction Action,
     DateTimeOffset At,

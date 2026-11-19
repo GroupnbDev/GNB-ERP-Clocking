@@ -17,8 +17,8 @@ public sealed class ClockKioskHttpTests : IDisposable
     private readonly FakeHandler _handler = new();
     private readonly KioskShiftCache _shifts = new();
 
-    private static readonly CandidateBadge Maya = new(
-        1042, 42, "Maya", "Chen", "04A1C8E291", "Candidate", "Inbound sort", "Sysco", "Brampton DC", 6, 16, "04A1C8E291");
+    private static readonly StaffBadge Maya = new(
+        1042, "E-042", "Maya", "Chen", "04A1C8E291", "Staff", "Inbound sort", "Sysco", "Brampton DC", 6, 16, "04A1C8E291");
 
     public void Dispose()
     {
@@ -47,21 +47,22 @@ public sealed class ClockKioskHttpTests : IDisposable
     private ClockSyncWorker Sync(string? key = Key) => new(Api(key), Store());
 
     [Fact]
-    public async Task Badge_lookup_resolves_the_candidate_and_remembers_the_open_shift()
+    public async Task Badge_lookup_resolves_the_user_and_remembers_the_open_shift()
     {
         _handler.On("GET", "/api/clock-kiosk/badges/04A1C8E291", HttpStatusCode.OK, """
-            {"candidate_id":1042,"candidate_number":42,"card_number":"04A1C8E291","first_name":"Maya","last_name":"Chen","rfid":"04A1C8E291",
+            {"user_id":1042,"employee_number":"E-042","rfid_number":"04A1C8E291","first_name":"Maya","last_name":"Chen","rfid":"04A1C8E291",
              "tenant_id":6,"organization_id":16,"is_on_shift":true,"open_clock_in":"2026-09-22T08:00:00-04:00",
              "reference_date":"2026-09-22","assignment":"Inbound sort","client_name":"Sysco","site":"Brampton DC","punch_card_id":500}
             """);
-        var directory = new HttpCandidateBadgeDirectory(Api(), _shifts, Store());
+        var directory = new HttpStaffBadgeDirectory(Api(), _shifts, Store());
 
         var badge = await directory.FindByRfidAsync(";04a1c8e291?");
 
         Assert.NotNull(badge);
-        Assert.Equal(1042, badge.CandidateId);
+        Assert.Equal(1042, badge.UserId);
         Assert.Equal("Maya Chen", badge.FullName);
-        Assert.Equal("04A1C8E291", badge.CardNumber);
+        Assert.Equal("04A1C8E291", badge.RfidNumber);
+        Assert.Equal("E-042", badge.EmployeeNumber);
         Assert.Equal("Brampton DC", badge.Site);
         Assert.Equal(new DateTimeOffset(2026, 9, 22, 8, 0, 0, TimeSpan.FromHours(-4)), _shifts.GetOpenClockIn(1042));
         Assert.Equal(Key, _handler.Requests.Single().Key);
@@ -71,25 +72,25 @@ public sealed class ClockKioskHttpTests : IDisposable
     public async Task Unknown_or_out_of_scope_badge_is_null()
     {
         _handler.On("GET", "/api/clock-kiosk/badges/04DEAD0001", HttpStatusCode.NotFound, """{"error":"nope"}""");
-        var directory = new HttpCandidateBadgeDirectory(Api(), _shifts, Store());
+        var directory = new HttpStaffBadgeDirectory(Api(), _shifts, Store());
 
         Assert.Null(await directory.FindByRfidAsync("04DEAD0001"));
         Assert.Empty(directory.ListLinkedBadges());
     }
 
     [Fact]
-    public async Task Badge_of_a_candidate_not_working_throws_with_the_rfid_to_reassign()
+    public async Task Badge_of_a_user_not_ready_throws_with_the_rfid_and_reason()
     {
         _handler.On("GET", "/api/clock-kiosk/badges/04A1C8E291", HttpStatusCode.Conflict, """
-            {"error":"Not working.","reason":"not_working","rfid":"04A1C8E291","candidate_name":"Maya Chen","status":"Inactive"}
+            {"error":"Not ready.","reason":"badge_not_ready","detail":"no_schedule","rfid":"04A1C8E291","user_name":"Maya Chen"}
             """);
-        var directory = new HttpCandidateBadgeDirectory(Api(), _shifts, Store());
+        var directory = new HttpStaffBadgeDirectory(Api(), _shifts, Store());
 
-        var ex = await Assert.ThrowsAsync<BadgeNotWorkingException>(() => directory.FindByRfidAsync("04A1C8E291"));
+        var ex = await Assert.ThrowsAsync<BadgeNotReadyException>(() => directory.FindByRfidAsync("04A1C8E291"));
 
         Assert.Equal("04A1C8E291", ex.Rfid);
-        Assert.Equal("Maya Chen", ex.CandidateName);
-        Assert.Equal("Inactive", ex.Status);
+        Assert.Equal("Maya Chen", ex.UserName);
+        Assert.Equal("no_schedule", ex.Detail);
         Assert.Null(_shifts.GetOpenClockIn(1042));
     }
 
@@ -97,14 +98,14 @@ public sealed class ClockKioskHttpTests : IDisposable
     public async Task Clock_in_posts_rfid_and_image_path_then_refreshes_sessions()
     {
         _handler.On("POST", "/api/clock-kiosk/clock-in", HttpStatusCode.OK, """
-            {"action":"clock_in","candidate_id":1042,"record_id":77,"utc_time":"2026-09-22T12:00:00Z",
+            {"action":"clock_in","user_id":1042,"record_id":77,"utc_time":"2026-09-22T12:00:00Z",
              "demand_name":"Inbound sort","image_path":"Records/2026-09-22/ClockIN.jpeg"}
             """);
         _handler.On("GET", "/api/clock-kiosk/sessions", HttpStatusCode.OK, """
-            {"events":[{"record_id":77,"candidate_id":1042,"first_name":"Maya","last_name":"Chen","candidate_name":"Maya Chen",
+            {"events":[{"record_id":77,"user_id":1042,"first_name":"Maya","last_name":"Chen","user_name":"Maya Chen",
              "action":"clock_in","local_time":"2026-09-22T08:00:00-04:00","assignment":"Inbound sort","hours_worked":null,
              "photo_relative_path":"Records/2026-09-22/ClockIN.jpeg"}],
-             "open_shifts":[{"candidate_id":1042,"open_clock_in":"2026-09-22T08:00:00-04:00"}],"open_count":1}
+             "open_shifts":[{"user_id":1042,"open_clock_in":"2026-09-22T08:00:00-04:00"}],"open_count":1}
             """);
         var service = new HttpClockingService(Api(), _shifts, Options(), Store(), Sync());
 
@@ -124,7 +125,7 @@ public sealed class ClockKioskHttpTests : IDisposable
     public async Task Clock_out_returns_hours_from_the_server()
     {
         _handler.On("POST", "/api/clock-kiosk/clock-out", HttpStatusCode.OK, """
-            {"action":"clock_out","candidate_id":1042,"record_id":77,"hours_worked":1.5,"utc_time":"2026-09-22T13:30:00Z",
+            {"action":"clock_out","user_id":1042,"record_id":77,"hours_worked":1.5,"utc_time":"2026-09-22T13:30:00Z",
              "demand_name":"Inbound sort","image_path":"Records/2026-09-22/ClockOut.jpeg"}
             """);
         _handler.On("GET", "/api/clock-kiosk/sessions", HttpStatusCode.OK, """{"events":[],"open_shifts":[],"open_count":0}""");
@@ -145,11 +146,11 @@ public sealed class ClockKioskHttpTests : IDisposable
         // records a clock-in. The screen must report the clock-in, not the kiosk's guess.
         _handler.On("POST", "/api/clock-kiosk/clock-out", HttpStatusCode.OK,
             """
-            {"action":"clock_in","candidate_id":1042,"record_id":77,"utc_time":"2026-09-25T12:00:00Z",
+            {"action":"clock_in","user_id":1042,"record_id":77,"utc_time":"2026-09-25T12:00:00Z",
              "demand_name":"Inbound sort","image_path":"Records/2026-09-25/ClockIN.jpeg","is_extra":false}
             """);
         _handler.On("GET", "/api/clock-kiosk/sessions", HttpStatusCode.OK, """{"events":[],"open_shifts":[],"open_count":0}""");
-        _handler.On("GET", "/api/clock-kiosk/roster", HttpStatusCode.OK, """{"candidates":[],"server_time":"2026-09-25T12:00:00Z","count":0}""");
+        _handler.On("GET", "/api/clock-kiosk/roster", HttpStatusCode.OK, """{"users":[],"server_time":"2026-09-25T12:00:00Z","count":0}""");
         var service = new HttpClockingService(Api(), _shifts, Options(), Store(), Sync());
 
         var clockEvent = await service.ClockOutAsync(Maya, Photo(isClockOut: true));
@@ -165,11 +166,11 @@ public sealed class ClockKioskHttpTests : IDisposable
         _shifts.SetShift(1042, DateTimeOffset.Now.AddHours(-3));
         _handler.On("POST", "/api/clock-kiosk/clock-in", HttpStatusCode.OK,
             """
-            {"action":"clock_in","candidate_id":1042,"record_id":77,"utc_time":"2026-09-25T12:00:00Z",
+            {"action":"clock_in","user_id":1042,"record_id":77,"utc_time":"2026-09-25T12:00:00Z",
              "demand_name":"Inbound sort","image_path":"Records/2026-09-25/ClockIN.jpeg","is_extra":true}
             """);
         _handler.On("GET", "/api/clock-kiosk/sessions", HttpStatusCode.OK, """{"events":[],"open_shifts":[],"open_count":0}""");
-        _handler.On("GET", "/api/clock-kiosk/roster", HttpStatusCode.OK, """{"candidates":[],"server_time":"2026-09-25T12:00:00Z","count":0}""");
+        _handler.On("GET", "/api/clock-kiosk/roster", HttpStatusCode.OK, """{"users":[],"server_time":"2026-09-25T12:00:00Z","count":0}""");
         var service = new HttpClockingService(Api(), _shifts, Options(), Store(), Sync());
 
         var clockEvent = await service.ClockInAsync(Maya, Photo(isClockOut: false), resetCompletedDay: false);
@@ -217,15 +218,16 @@ public sealed class ClockKioskHttpTests : IDisposable
     {
         // Overnight: the kiosk thinks today, the server files the clock-out under the open shift's day.
         _handler.On("POST", "/api/clock-kiosk/photos", HttpStatusCode.OK,
-            """{"relative_path":"Records/2026-09-21/ClockOut.jpeg","file_name":"ClockOut.jpeg"}""");
+            """{"relative_path":"Records/2026-09-21/ClockOut_1.jpeg","file_name":"ClockOut_1.jpeg"}""");
         var store = new HttpClockPhotoStore(new FileClockPhotoStore(_root), Api(), Options());
 
         var photo = await store.SaveJpegAsync(Maya, isClockOut: true, new DateTime(2026, 9, 22), new byte[] { 0xFF, 0xD8, 0xFF });
 
-        Assert.Equal("Records/2026-09-21/ClockOut.jpeg", photo.RelativePath);
+        Assert.Equal("Records/2026-09-21/ClockOut_1.jpeg", photo.RelativePath);
+        Assert.True(photo.OnServer);
         Assert.True(File.Exists(photo.AbsolutePath));
-        Assert.EndsWith(Path.Combine("Candidates", "1042", "Records", "2026-09-21", "ClockOut.jpeg"), photo.AbsolutePath);
-        Assert.False(File.Exists(Path.Combine(_root, "Candidates", "1042", "Records", "2026-09-22", "ClockOut.jpeg")));
+        Assert.EndsWith(Path.Combine("Users", "1042", "Records", "2026-09-21", "ClockOut_1.jpeg"), photo.AbsolutePath);
+        Assert.False(File.Exists(Path.Combine(_root, "Users", "1042", "Records", "2026-09-22", "ClockOut.jpeg")));
         var upload = _handler.Requests.Single().Body!;
         Assert.Contains("name=rfid", upload);
         Assert.Contains("04A1C8E291", upload);
@@ -235,7 +237,7 @@ public sealed class ClockKioskHttpTests : IDisposable
     public async Task Photo_store_moves_the_thumbnail_with_the_photo()
     {
         _handler.On("POST", "/api/clock-kiosk/photos", HttpStatusCode.OK,
-            """{"relative_path":"Records/2026-09-21/ClockOut.jpeg","file_name":"ClockOut.jpeg"}""");
+            """{"relative_path":"Records/2026-09-21/ClockOut_1.jpeg","file_name":"ClockOut_1.jpeg"}""");
         var previous = ClockPhotoThumbnail.Write;
         ClockPhotoThumbnail.Write = photo => File.WriteAllBytes(ClockPhotoThumbnail.PathFor(photo), new byte[] { 0xFF, 0xD8 });
         try
@@ -245,7 +247,7 @@ public sealed class ClockKioskHttpTests : IDisposable
             var photo = await store.SaveJpegAsync(Maya, isClockOut: true, new DateTime(2026, 9, 22), new byte[] { 0xFF, 0xD8, 0xFF });
 
             Assert.True(File.Exists(ClockPhotoThumbnail.PathFor(photo.AbsolutePath)));
-            Assert.False(File.Exists(Path.Combine(_root, "Candidates", "1042", "Records", "2026-09-22", "ClockOut.thumb.jpeg")));
+            Assert.False(File.Exists(Path.Combine(_root, "Users", "1042", "Records", "2026-09-22", "ClockOut.thumb.jpeg")));
         }
         finally
         {
@@ -254,7 +256,7 @@ public sealed class ClockKioskHttpTests : IDisposable
     }
 
     [Fact]
-    public async Task File_store_saves_clock_in_jpeg_under_the_candidate_record_day()
+    public async Task File_store_saves_clock_in_jpeg_under_the_user_record_day()
     {
         var photo = await new FileClockPhotoStore(_root).SaveJpegAsync(Maya, false, new DateTime(2026, 9, 22), new byte[] { 1, 2, 3 });
 
@@ -263,7 +265,7 @@ public sealed class ClockKioskHttpTests : IDisposable
     }
 
     private ClockPhoto Photo(bool isClockOut) =>
-        new(ClockPhotoPaths.RelativePath(new DateTime(2026, 9, 22), isClockOut), Path.Combine(_root, "clock.jpg"));
+        new(ClockPhotoPaths.RelativePath(new DateTime(2026, 9, 22), isClockOut), Path.Combine(_root, "clock.jpg"), OnServer: true);
 
     private sealed class FakeHandler : HttpMessageHandler
     {

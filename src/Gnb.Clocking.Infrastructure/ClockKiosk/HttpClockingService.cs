@@ -50,7 +50,7 @@ public sealed class HttpClockingService : IClockingService
     /// <summary>Queued punches the server refused. These need a person, not another retry.</summary>
     public int ParkedCount { get; private set; }
 
-    public DateTimeOffset? GetOpenClockIn(int candidateId) => _shifts.GetOpenClockIn(candidateId);
+    public DateTimeOffset? GetOpenClockIn(int userId) => _shifts.GetOpenClockIn(userId);
 
     /// <summary>
     /// Server events plus whatever this device is still holding, newest first. A punch taken during an
@@ -77,14 +77,14 @@ public sealed class HttpClockingService : IClockingService
     private static ClockEvent ToQueuedEvent(QueuedPunch punch)
     {
         var parked = punch.State == QueuedPunchStates.Parked;
-        var name = string.IsNullOrWhiteSpace(punch.CandidateName) ? punch.CardNumber : punch.CandidateName;
+        var name = string.IsNullOrWhiteSpace(punch.UserName) ? punch.RfidNumber : punch.UserName;
         var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var initials = parts.Length >= 2
             ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant()
             : name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
 
         return new ClockEvent(
-            punch.CandidateId,
+            punch.UserId,
             name,
             initials,
             punch.IsClockOut ? ClockAction.Out : ClockAction.In,
@@ -108,12 +108,12 @@ public sealed class HttpClockingService : IClockingService
         foreach (OpenShiftRecord shift in openShifts)
         {
             if (shift.OpenClockIn is DateTimeOffset at)
-                _shifts.SetShift(shift.CandidateId, at);
+                _shifts.SetShift(shift.UserId, at);
         }
 
         // A queued punch is newer than that snapshot, so it wins.
         foreach (QueuedPunch punch in await _store.ListPendingAsync().ConfigureAwait(false))
-            _shifts.SetShift(punch.CandidateId, punch.IsClockOut ? null : punch.LocalTime);
+            _shifts.SetShift(punch.UserId, punch.IsClockOut ? null : punch.LocalTime);
 
         PendingCount = await _store.CountPendingAsync().ConfigureAwait(false);
         ParkedCount = await _store.CountParkedAsync().ConfigureAwait(false);
@@ -136,7 +136,7 @@ public sealed class HttpClockingService : IClockingService
             .OfType<ClockEvent>()
             .ToArray();
         var open = (sessions.OpenShifts ?? new List<OpenShift>())
-            .Select(shift => new KeyValuePair<int, DateTimeOffset>(shift.CandidateId, shift.OpenClockIn));
+            .Select(shift => new KeyValuePair<int, DateTimeOffset>(shift.UserId, shift.OpenClockIn));
         var openList = open.ToList();
         _shifts.Replace(openList, events);
         // Survive a restart during an outage: without this the next scan looks like a clock-in.
@@ -144,26 +144,24 @@ public sealed class HttpClockingService : IClockingService
     }
 
     public Task<ClockEvent> ClockInAsync(
-        CandidateBadge candidate,
+        StaffBadge staff,
         ClockPhoto photo,
         bool resetCompletedDay = false,
         CancellationToken cancellationToken = default) =>
-        PunchAsync(candidate, photo, isClockOut: false, resetCompletedDay, cancellationToken);
+        PunchAsync(staff, photo, isClockOut: false, resetCompletedDay, cancellationToken);
 
-    public Task<ClockEvent> ClockOutAsync(CandidateBadge candidate, ClockPhoto photo, CancellationToken cancellationToken = default) =>
-        PunchAsync(candidate, photo, isClockOut: true, resetCompletedDay: false, cancellationToken);
+    public Task<ClockEvent> ClockOutAsync(StaffBadge staff, ClockPhoto photo, CancellationToken cancellationToken = default) =>
+        PunchAsync(staff, photo, isClockOut: true, resetCompletedDay: false, cancellationToken);
 
     private async Task<ClockEvent> PunchAsync(
-        CandidateBadge candidate,
+        StaffBadge staff,
         ClockPhoto photo,
         bool isClockOut,
         bool resetCompletedDay,
         CancellationToken cancellationToken)
     {
         var relative = photo?.RelativePath?.Replace('\\', '/') ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(relative)
-            || !relative.EndsWith(ClockPhotoPaths.FileName(isClockOut), StringComparison.Ordinal)
-            || string.IsNullOrWhiteSpace(photo?.AbsolutePath))
+        if (string.IsNullOrWhiteSpace(relative) || string.IsNullOrWhiteSpace(photo?.AbsolutePath))
             throw new ClockingException("A photo is required to clock in or out.");
 
         var clientPunchId = Guid.NewGuid().ToString("N");
@@ -171,9 +169,13 @@ public sealed class HttpClockingService : IClockingService
         ClockActionResponse result;
         try
         {
+            // The photo never reached the server, so there is no server path to send: keep the punch for the drain.
+            if (!photo.OnServer)
+                throw new ClockOfflineException("The photo is not on the clock server yet.");
+
             result = await _api.ClockAsync(
                     isClockOut,
-                    candidate.Rfid,
+                    staff.Rfid,
                     relative,
                     resetCompletedDay,
                     clientPunchId,
@@ -185,9 +187,9 @@ public sealed class HttpClockingService : IClockingService
         }
         catch (ClockOfflineException)
         {
-            _logger.LogInformation("Punch queued offline for candidate {CandidateId}", candidate.CandidateId);
+            _logger.LogInformation("Punch queued offline for user {UserId}", staff.UserId);
             // Keep the punch on the device with its own id, so the drain cannot double it later.
-            return await QueueAsync(candidate, photo, isClockOut, clientPunchId, capturedAt, relative).ConfigureAwait(false);
+            return await QueueAsync(staff, photo, isClockOut, clientPunchId, capturedAt, relative).ConfigureAwait(false);
         }
 
         var at = new DateTimeOffset(DateTime.SpecifyKind(result.UtcTime, DateTimeKind.Utc));
@@ -202,15 +204,15 @@ public sealed class HttpClockingService : IClockingService
         };
         // Extra time does not open or close the day's shift, so it must not move the on-shift state.
         if (!result.IsExtra)
-            _shifts.SetShift(candidate.CandidateId, savedAction == ClockAction.Out ? null : at);
+            _shifts.SetShift(staff.UserId, savedAction == ClockAction.Out ? null : at);
 
         var clockEvent = new ClockEvent(
-            candidate.CandidateId,
-            candidate.FullName,
-            candidate.Initials,
+            staff.UserId,
+            staff.FullName,
+            staff.Initials,
             savedAction,
             at,
-            string.IsNullOrWhiteSpace(result.DemandName) ? candidate.Assignment : result.DemandName,
+            string.IsNullOrWhiteSpace(result.DemandName) ? staff.Assignment : result.DemandName,
             savedAction == ClockAction.Out ? result.HoursWorked : null,
             result.ImagePath ?? relative,
             photo.AbsolutePath,
@@ -251,7 +253,7 @@ public sealed class HttpClockingService : IClockingService
     /// it with the same id and the original tap time, so the punch card shows when they actually tapped.
     /// </summary>
     private async Task<ClockEvent> QueueAsync(
-        CandidateBadge candidate,
+        StaffBadge staff,
         ClockPhoto photo,
         bool isClockOut,
         string clientPunchId,
@@ -261,10 +263,10 @@ public sealed class HttpClockingService : IClockingService
         await _store.EnqueueAsync(new QueuedPunch
         {
             ClientPunchId = clientPunchId,
-            CandidateId = candidate.CandidateId,
-            CardNumber = candidate.Rfid,
-            CandidateName = candidate.FullName,
-            Assignment = candidate.Assignment,
+            UserId = staff.UserId,
+            RfidNumber = staff.Rfid,
+            UserName = staff.FullName,
+            Assignment = staff.Assignment,
             IsClockOut = isClockOut,
             LocalTime = capturedAt,
             PhotoPath = photo.AbsolutePath,
@@ -274,17 +276,17 @@ public sealed class HttpClockingService : IClockingService
             CapturedAt = capturedAt,
         }).ConfigureAwait(false);
 
-        _shifts.SetShift(candidate.CandidateId, isClockOut ? null : capturedAt);
+        _shifts.SetShift(staff.UserId, isClockOut ? null : capturedAt);
         PendingCount = await _store.CountPendingAsync().ConfigureAwait(false);
         await ReloadQueuedEventsAsync().ConfigureAwait(false);
 
         return new ClockEvent(
-            candidate.CandidateId,
-            candidate.FullName,
-            candidate.Initials,
+            staff.UserId,
+            staff.FullName,
+            staff.Initials,
             isClockOut ? ClockAction.Out : ClockAction.In,
             capturedAt,
-            candidate.Assignment,
+            staff.Assignment,
             HoursWorked: null,
             relativePath,
             photo.AbsolutePath,
@@ -304,9 +306,9 @@ public sealed class HttpClockingService : IClockingService
 
         var first = session.FirstName ?? string.Empty;
         var last = session.LastName ?? string.Empty;
-        var name = string.IsNullOrWhiteSpace(session.CandidateName) ? $"{first} {last}".Trim() : session.CandidateName;
+        var name = string.IsNullOrWhiteSpace(session.UserName) ? $"{first} {last}".Trim() : session.UserName;
         return new ClockEvent(
-            session.CandidateId,
+            session.UserId,
             name,
             Initials(first, last),
             action.Value,
@@ -314,7 +316,7 @@ public sealed class HttpClockingService : IClockingService
             session.Assignment ?? string.Empty,
             action == ClockAction.Out ? session.HoursWorked : null,
             session.PhotoRelativePath,
-            ClockKioskPhotoPaths.ExistingLocalPath(_photoRoot, session.CandidateId, session.PhotoRelativePath));
+            ClockKioskPhotoPaths.ExistingLocalPath(_photoRoot, session.UserId, session.PhotoRelativePath));
     }
 
     private static string Initials(string first, string last)

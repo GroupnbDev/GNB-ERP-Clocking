@@ -17,8 +17,8 @@ public sealed class ClockKioskApiClient
         "The clock server is not configured. Set ClockKiosk:BaseUrl and ClockKiosk:ApiKey.";
     private const string UnreachableMessage =
         "Cannot reach the GroupNB clock server. Check the network and try again.";
-    private const string UnknownBadgeMessage = "No GroupNB candidate is linked to this badge.";
-    private const string NotWorkingBadgeMessage = "This badge belongs to a candidate who is not Working.";
+    private const string UnknownBadgeMessage = "No GroupNB staff user is linked to this badge.";
+    private const string NotReadyBadgeMessage = "This badge isn't ready to clock — ask HR.";
 
     private readonly HttpClient _http;
     private readonly bool _configured;
@@ -39,8 +39,8 @@ public sealed class ClockKioskApiClient
     }
 
     /// <summary>
-    /// Null when the badge is unknown or outside the GroupNB allowlist (API 404). Throws
-    /// <see cref="BadgeNotWorkingException"/> when the card's candidate is not Working (API 409).
+    /// Null when the badge is unknown or outside the kiosk's tenant/organization scope (API 404). Throws
+    /// <see cref="BadgeNotReadyException"/> when the badge's user is inactive or has no work schedule (API 409).
     /// </summary>
     internal async Task<BadgeResponse?> GetBadgeAsync(string rfid, CancellationToken cancellationToken)
     {
@@ -52,7 +52,7 @@ public sealed class ClockKioskApiClient
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;
         if (response.StatusCode == HttpStatusCode.Conflict)
-            throw await ReadNotWorkingAsync(response, rfid, cancellationToken).ConfigureAwait(false);
+            throw await ReadNotReadyAsync(response, rfid, cancellationToken).ConfigureAwait(false);
 
         return await ReadAsync<BadgeResponse>(response, cancellationToken).ConfigureAwait(false);
     }
@@ -180,26 +180,26 @@ public sealed class ClockKioskApiClient
         throw new ClockingException(message);
     }
 
-    private static async Task<BadgeNotWorkingException> ReadNotWorkingAsync(
+    private static async Task<BadgeNotReadyException> ReadNotReadyAsync(
         HttpResponseMessage response,
         string rfid,
         CancellationToken cancellationToken)
     {
-        BadgeNotWorkingError? error = null;
+        BadgeNotReadyError? error = null;
         try
         {
-            error = await response.Content.ReadFromJsonAsync<BadgeNotWorkingError>(cancellationToken).ConfigureAwait(false);
+            error = await response.Content.ReadFromJsonAsync<BadgeNotReadyError>(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
         {
             // Unreadable body: the RFID number from the tap is still enough for the dialog.
         }
 
-        return new BadgeNotWorkingException(
-            string.IsNullOrWhiteSpace(error?.Error) ? NotWorkingBadgeMessage : error.Error,
+        return new BadgeNotReadyException(
+            string.IsNullOrWhiteSpace(error?.Error) ? NotReadyBadgeMessage : error.Error,
             string.IsNullOrWhiteSpace(error?.Rfid) ? rfid : error.Rfid,
-            error?.CandidateName ?? string.Empty,
-            error?.Status);
+            error?.UserName ?? string.Empty,
+            error?.Detail);
     }
 
     private static async Task<string?> ReadErrorAsync(HttpResponseMessage response, CancellationToken cancellationToken)

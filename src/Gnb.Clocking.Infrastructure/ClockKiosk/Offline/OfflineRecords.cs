@@ -32,14 +32,14 @@ public class QueuedPunch
     public string ClientPunchId { get; set; } = string.Empty;
 
     [Indexed]
-    [Column("candidate_id")]
-    public int CandidateId { get; set; }
+    [Column("user_id")]
+    public int UserId { get; set; }
 
-    [Column("card_number")]
-    public string CardNumber { get; set; } = string.Empty;
+    [Column("rfid_number")]
+    public string RfidNumber { get; set; } = string.Empty;
 
-    [Column("candidate_name")]
-    public string CandidateName { get; set; } = string.Empty;
+    [Column("user_name")]
+    public string UserName { get; set; } = string.Empty;
 
     [Column("assignment")]
     public string Assignment { get; set; } = string.Empty;
@@ -96,20 +96,20 @@ public class QueuedPunch
     public DateTimeOffset? SyncedAt { get; set; }
 }
 
-/// <summary>A candidate the kiosk may clock while the link is down. Refreshed from the API when online.</summary>
+/// <summary>A staff user the kiosk may clock while the link is down. Refreshed from the API when online.</summary>
 [Table("roster_entry")]
 public class RosterEntry
 {
-    /// <summary>Normalized card number (uppercase letters and digits).</summary>
+    /// <summary>Normalized RFID number (uppercase letters and digits).</summary>
     [PrimaryKey]
-    [Column("card_number")]
-    public string CardNumber { get; set; } = string.Empty;
+    [Column("rfid_number")]
+    public string RfidNumber { get; set; } = string.Empty;
 
-    [Column("candidate_id")]
-    public int CandidateId { get; set; }
+    [Column("user_id")]
+    public int UserId { get; set; }
 
-    [Column("candidate_number")]
-    public int CandidateNumber { get; set; }
+    [Column("employee_number")]
+    public string EmployeeNumber { get; set; } = string.Empty;
 
     [Column("first_name")]
     public string FirstName { get; set; } = string.Empty;
@@ -151,8 +151,8 @@ public class KioskSetting
 public class OpenShiftRecord
 {
     [PrimaryKey]
-    [Column("candidate_id")]
-    public int CandidateId { get; set; }
+    [Column("user_id")]
+    public int UserId { get; set; }
 
     /// <summary>ISO 8601 with offset, for the same reason the queued tap time is text.</summary>
     [Column("open_clock_in")]

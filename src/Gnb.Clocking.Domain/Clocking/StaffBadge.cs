@@ -1,12 +1,12 @@
 namespace Gnb.Clocking.Domain.Clocking;
 
 /// <summary>
-/// A recruitment candidate matched by <c>candidates.card_number</c>.
-/// <see cref="CandidateId"/> stays the database id used for punch rows and photo folders.
+/// A staff user matched by <c>users.rfid_number</c>.
+/// <see cref="UserId"/> stays the database id used for punch rows and photo folders.
 /// </summary>
-public sealed record CandidateBadge(
-    int CandidateId,
-    int CandidateNumber,
+public sealed record StaffBadge(
+    int UserId,
+    string EmployeeNumber,
     string FirstName,
     string LastName,
     string Rfid,
@@ -16,7 +16,7 @@ public sealed record CandidateBadge(
     string Site,
     int TenantId,
     int OrganizationId,
-    string CardNumber,
+    string RfidNumber,
     bool ShiftFinished = false,
     DateTimeOffset? FinishedClockIn = null,
     DateTimeOffset? FinishedClockOut = null)
